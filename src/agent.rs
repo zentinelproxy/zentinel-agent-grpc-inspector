@@ -350,6 +350,43 @@ impl GrpcInspectorAgent {
         None
     }
 
+    /// Check response size limits.
+    fn check_response_size(&self, path: &GrpcPath, body: Option<&[u8]>) -> Option<Decision> {
+        if !self.compiled.size_limits.enabled {
+            return None;
+        }
+
+        let max_size = self.compiled.size_limits.get_max_response_bytes(path);
+        if max_size == 0 {
+            return None; // Unlimited
+        }
+
+        // Try to parse message size from gRPC frame header
+        if let Some(body) = body {
+            if let Some(msg_size) = parse_message_size(body) {
+                if msg_size as u64 > max_size {
+                    warn!(
+                        service = %path.full_service,
+                        method = %path.method,
+                        size = msg_size,
+                        limit = max_size,
+                        "Response message size exceeds limit"
+                    );
+                    return Some(self.block_grpc(
+                        GrpcStatus::ResourceExhausted,
+                        &format!(
+                            "Response message size {} exceeds limit {}",
+                            msg_size, max_size
+                        ),
+                        "grpc-inspector:response-too-large",
+                    ));
+                }
+            }
+        }
+
+        None
+    }
+
     /// Allow with optional debug headers.
     fn allow_with_debug(&self, path: &GrpcPath) -> Decision {
         if self.config.settings.log_allowed {
@@ -438,9 +475,23 @@ impl Agent for GrpcInspectorAgent {
         self.allow_with_debug(&path)
     }
 
-    async fn on_response(&self, _request: &Request, response: &Response) -> Decision {
-        // TODO: Check response size limits if configured
-        let _ = response;
+    async fn on_response(&self, request: &Request, response: &Response) -> Decision {
+        // Only check response size if size limits are enabled
+        if !self.compiled.size_limits.enabled {
+            return Decision::allow();
+        }
+
+        // Parse gRPC path from original request
+        let path = match GrpcPath::parse(request.path()) {
+            Some(p) => p,
+            None => return Decision::allow(), // Non-gRPC or invalid path
+        };
+
+        // Check response size limits
+        if let Some(decision) = self.check_response_size(&path, response.body()) {
+            return decision;
+        }
+
         Decision::allow()
     }
 }
@@ -601,5 +652,35 @@ size_limits:
         // Large message should fail
         let body = vec![0x00, 0x00, 0x00, 0x00, 0x80]; // 128 bytes
         assert!(agent.check_request_size(&path, Some(&body)).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_response_size_limit_check() {
+        let yaml = r#"
+size_limits:
+  enabled: true
+  default_max_response_bytes: 100
+  per_method:
+    - service: "test.FileService"
+      method: "Download"
+      max_response_bytes: 1000
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let agent = GrpcInspectorAgent::new(config);
+
+        let path = GrpcPath::parse("/test.Service/Method").unwrap();
+
+        // Small message should pass
+        let body = vec![0x00, 0x00, 0x00, 0x00, 0x0A]; // 10 bytes
+        assert!(agent.check_response_size(&path, Some(&body)).is_none());
+
+        // Large message should fail
+        let body = vec![0x00, 0x00, 0x00, 0x00, 0x80]; // 128 bytes
+        assert!(agent.check_response_size(&path, Some(&body)).is_some());
+
+        // FileService.Download has higher limit
+        let file_path = GrpcPath::parse("/test.FileService/Download").unwrap();
+        let body = vec![0x00, 0x00, 0x00, 0x00, 0x80]; // 128 bytes
+        assert!(agent.check_response_size(&file_path, Some(&body)).is_none());
     }
 }
