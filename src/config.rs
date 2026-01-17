@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Main configuration for the gRPC Inspector agent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// Global settings
@@ -30,19 +30,6 @@ pub struct Config {
     /// Reflection API control
     #[serde(default)]
     pub reflection: ReflectionConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            settings: Settings::default(),
-            authorization: AuthorizationConfig::default(),
-            size_limits: SizeLimitsConfig::default(),
-            metadata: MetadataConfig::default(),
-            rate_limiting: RateLimitingConfig::default(),
-            reflection: ReflectionConfig::default(),
-        }
-    }
 }
 
 impl Config {
@@ -363,7 +350,7 @@ impl MethodSizeLimit {
 }
 
 /// Metadata inspection configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MetadataConfig {
     /// Enable metadata inspection
@@ -381,17 +368,6 @@ pub struct MetadataConfig {
     /// Header validation rules
     #[serde(default)]
     pub validation: Vec<HeaderValidation>,
-}
-
-impl Default for MetadataConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            required: Vec::new(),
-            forbidden: Vec::new(),
-            validation: Vec::new(),
-        }
-    }
 }
 
 impl MetadataConfig {
@@ -627,7 +603,7 @@ impl MethodRateLimit {
 }
 
 /// Reflection API control configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReflectionConfig {
     /// Enable reflection control
@@ -645,17 +621,6 @@ pub struct ReflectionConfig {
     /// Allowed metadata for reflection access
     #[serde(default)]
     pub allowed_metadata: Option<ReflectionMetadata>,
-}
-
-impl Default for ReflectionConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            allow: false,
-            allowed_clients: Vec::new(),
-            allowed_metadata: None,
-        }
-    }
 }
 
 impl ReflectionConfig {

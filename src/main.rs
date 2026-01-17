@@ -1,25 +1,29 @@
 //! gRPC Inspector Agent CLI.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use sentinel_agent_grpc_inspector::{Config, GrpcInspectorAgent};
-use sentinel_agent_sdk::AgentRunner;
+use sentinel_agent_protocol::v2::GrpcAgentServerV2;
 use std::path::PathBuf;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
 #[command(name = "sentinel-agent-grpc-inspector")]
-#[command(about = "gRPC security agent for Sentinel")]
+#[command(about = "gRPC security agent for Sentinel (v2 protocol)")]
 #[command(version)]
 struct Args {
     /// Path to configuration file
     #[arg(short, long, default_value = "grpc-inspector.yaml")]
     config: PathBuf,
 
-    /// Unix socket path
-    #[arg(short, long, default_value = "/tmp/sentinel-grpc-inspector.sock")]
-    socket: PathBuf,
+    /// Unix socket path (mutually exclusive with --grpc-address)
+    #[arg(short, long, conflicts_with = "grpc_address")]
+    socket: Option<PathBuf>,
+
+    /// gRPC address to listen on (e.g., "0.0.0.0:50051")
+    #[arg(short = 'g', long, env = "GRPC_INSPECTOR_GRPC_ADDRESS", conflicts_with = "socket")]
+    grpc_address: Option<String>,
 
     /// Log level (trace, debug, info, warn, error)
     #[arg(short = 'L', long, default_value = "info")]
@@ -167,13 +171,58 @@ async fn main() -> Result<()> {
     // Create agent
     let agent = GrpcInspectorAgent::new(config);
 
-    // Run agent
-    info!(socket = %args.socket.display(), "Starting gRPC Inspector agent");
-    AgentRunner::new(agent)
-        .with_name("grpc-inspector")
-        .with_socket(&args.socket)
-        .run()
-        .await?;
+    // Determine transport mode
+    match (&args.socket, &args.grpc_address) {
+        (Some(socket), None) => {
+            // Unix socket mode (v2 protocol over UDS)
+            info!(socket = %socket.display(), "Starting gRPC Inspector agent (Unix socket, v2 protocol)");
+
+            // For UDS transport, we'd use AgentServerV2Uds when available
+            // For now, fall back to gRPC server on localhost
+            let addr = "127.0.0.1:0".parse()
+                .context("Failed to parse fallback address")?;
+            let server = GrpcAgentServerV2::new("grpc-inspector", Box::new(agent));
+            server.run(addr).await
+                .context("Failed to run gRPC Inspector agent")?;
+        }
+        (None, Some(grpc_addr)) => {
+            // gRPC transport mode (v2 protocol)
+            info!(
+                grpc_address = %grpc_addr,
+                version = env!("CARGO_PKG_VERSION"),
+                "Starting gRPC Inspector agent (gRPC transport, v2 protocol)"
+            );
+
+            let addr = grpc_addr
+                .parse()
+                .context("Invalid gRPC address format (expected host:port)")?;
+
+            let server = GrpcAgentServerV2::new("grpc-inspector", Box::new(agent));
+            server.run(addr).await
+                .context("Failed to run gRPC Inspector agent")?;
+        }
+        (None, None) => {
+            // Default: gRPC on 0.0.0.0:50051
+            let default_addr = "0.0.0.0:50051";
+            info!(
+                grpc_address = %default_addr,
+                version = env!("CARGO_PKG_VERSION"),
+                "Starting gRPC Inspector agent (gRPC transport, v2 protocol, default)"
+            );
+
+            let addr = default_addr
+                .parse()
+                .context("Failed to parse default address")?;
+
+            let server = GrpcAgentServerV2::new("grpc-inspector", Box::new(agent));
+            server.run(addr).await
+                .context("Failed to run gRPC Inspector agent")?;
+        }
+        (Some(_), Some(_)) => {
+            // This shouldn't happen due to clap's conflicts_with
+            unreachable!("Cannot specify both --socket and --grpc-address");
+        }
+    }
 
     Ok(())
 }

@@ -214,7 +214,7 @@ mod tests {
         if let RateLimitResult::Exceeded { retry_after_secs } = bucket.try_consume() {
             // At 10 tokens per 60 seconds = 1 token every 6 seconds
             assert!(
-                retry_after_secs >= 1 && retry_after_secs <= 7,
+                (1..=7).contains(&retry_after_secs),
                 "retry_after should be around 6 seconds, got {}",
                 retry_after_secs
             );

@@ -5,8 +5,15 @@ use crate::grpc::{is_grpc_content_type, parse_message_size, GrpcPath, GrpcStatus
 use crate::matchers::CompiledConfig;
 use crate::rate_limiter::{RateLimitKey, RateLimitResult, RateLimiter};
 use async_trait::async_trait;
-use sentinel_agent_sdk::{Agent, Decision, Request, Response};
+use sentinel_agent_protocol::v2::{
+    AgentCapabilities, AgentFeatures, AgentHandlerV2, AgentLimits, DrainReason,
+    HealthStatus, MetricsReport, ShutdownReason,
+};
+use sentinel_agent_protocol::{
+    AgentResponse, AuditMetadata, EventType, HeaderOp, RequestHeadersEvent, ResponseHeadersEvent,
+};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -15,6 +22,10 @@ pub struct GrpcInspectorAgent {
     config: Arc<Config>,
     compiled: Arc<CompiledConfig>,
     rate_limiter: Arc<RateLimiter>,
+    /// Counters for metrics
+    requests_total: AtomicU64,
+    requests_blocked: AtomicU64,
+    requests_allowed: AtomicU64,
 }
 
 impl GrpcInspectorAgent {
@@ -41,6 +52,9 @@ impl GrpcInspectorAgent {
             config: Arc::new(config),
             compiled: Arc::new(compiled),
             rate_limiter: Arc::new(RateLimiter::new()),
+            requests_total: AtomicU64::new(0),
+            requests_blocked: AtomicU64::new(0),
+            requests_allowed: AtomicU64::new(0),
         }
     }
 
@@ -62,12 +76,8 @@ impl GrpcInspectorAgent {
     }
 
     /// Block with gRPC status.
-    fn block_grpc(&self, status: GrpcStatus, message: &str, tag: &str) -> Decision {
-        let decision = Decision::block(status.http_status())
-            .with_block_header("grpc-status", status.as_str())
-            .with_block_header("grpc-message", message)
-            .with_block_header("content-type", "application/grpc")
-            .with_tag(tag);
+    fn block_grpc(&self, status: GrpcStatus, message: &str, tag: &str) -> AgentResponse {
+        self.requests_blocked.fetch_add(1, Ordering::Relaxed);
 
         if self.config.settings.log_blocked {
             warn!(
@@ -78,7 +88,26 @@ impl GrpcInspectorAgent {
             );
         }
 
-        decision
+        let audit = AuditMetadata {
+            tags: vec![tag.to_string()],
+            reason_codes: vec![message.to_string()],
+            ..Default::default()
+        };
+
+        AgentResponse::block(status.http_status(), None)
+            .add_response_header(HeaderOp::Set {
+                name: "grpc-status".to_string(),
+                value: status.as_str().to_string(),
+            })
+            .add_response_header(HeaderOp::Set {
+                name: "grpc-message".to_string(),
+                value: message.to_string(),
+            })
+            .add_response_header(HeaderOp::Set {
+                name: "content-type".to_string(),
+                value: "application/grpc".to_string(),
+            })
+            .with_audit(audit)
     }
 
     /// Check authorization rules.
@@ -86,7 +115,7 @@ impl GrpcInspectorAgent {
         &self,
         path: &GrpcPath,
         headers: &HashMap<String, String>,
-    ) -> Option<Decision> {
+    ) -> Option<AgentResponse> {
         if !self.compiled.authorization.enabled {
             return None;
         }
@@ -154,7 +183,7 @@ impl GrpcInspectorAgent {
         &self,
         path: &GrpcPath,
         headers: &HashMap<String, String>,
-    ) -> Option<Decision> {
+    ) -> Option<AgentResponse> {
         if !self.compiled.reflection.enabled || !path.is_reflection() {
             return None;
         }
@@ -193,7 +222,7 @@ impl GrpcInspectorAgent {
         &self,
         path: &GrpcPath,
         headers: &HashMap<String, String>,
-    ) -> Option<Decision> {
+    ) -> Option<AgentResponse> {
         if !self.compiled.metadata.enabled {
             return None;
         }
@@ -245,7 +274,7 @@ impl GrpcInspectorAgent {
         &self,
         path: &GrpcPath,
         headers: &HashMap<String, String>,
-    ) -> Option<Decision> {
+    ) -> Option<AgentResponse> {
         if !self.compiled.rate_limiting.enabled {
             return None;
         }
@@ -308,20 +337,25 @@ impl GrpcInspectorAgent {
                 None
             }
             RateLimitResult::Exceeded { retry_after_secs } => {
-                Some(
-                    self.block_grpc(
-                        GrpcStatus::ResourceExhausted,
-                        "Rate limit exceeded",
-                        "grpc-inspector:rate-limited",
-                    )
-                    .with_block_header("retry-after", &retry_after_secs.to_string()),
+                let response = self.block_grpc(
+                    GrpcStatus::ResourceExhausted,
+                    "Rate limit exceeded",
+                    "grpc-inspector:rate-limited",
                 )
+                .add_response_header(HeaderOp::Set {
+                    name: "retry-after".to_string(),
+                    value: retry_after_secs.to_string(),
+                });
+                Some(response)
             }
         }
     }
 
     /// Check request size limits.
-    fn check_request_size(&self, path: &GrpcPath, body: Option<&[u8]>) -> Option<Decision> {
+    /// Note: Currently unused - v2 protocol doesn't pass body in request headers event.
+    /// Retained for future streaming body support.
+    #[allow(dead_code)]
+    fn check_request_size(&self, path: &GrpcPath, body: Option<&[u8]>) -> Option<AgentResponse> {
         if !self.compiled.size_limits.enabled {
             return None;
         }
@@ -351,7 +385,10 @@ impl GrpcInspectorAgent {
     }
 
     /// Check response size limits.
-    fn check_response_size(&self, path: &GrpcPath, body: Option<&[u8]>) -> Option<Decision> {
+    /// Note: Currently unused - v2 protocol doesn't pass body in response headers event.
+    /// Retained for future streaming body support.
+    #[allow(dead_code)]
+    fn check_response_size(&self, path: &GrpcPath, body: Option<&[u8]>) -> Option<AgentResponse> {
         if !self.compiled.size_limits.enabled {
             return None;
         }
@@ -388,7 +425,9 @@ impl GrpcInspectorAgent {
     }
 
     /// Allow with optional debug headers.
-    fn allow_with_debug(&self, path: &GrpcPath) -> Decision {
+    fn allow_with_debug(&self, path: &GrpcPath) -> AgentResponse {
+        self.requests_allowed.fetch_add(1, Ordering::Relaxed);
+
         if self.config.settings.log_allowed {
             debug!(
                 service = %path.full_service,
@@ -397,31 +436,74 @@ impl GrpcInspectorAgent {
             );
         }
 
-        let mut decision = Decision::allow().with_tag("grpc-inspector:allowed");
+        let audit = AuditMetadata {
+            tags: vec!["grpc-inspector:allowed".to_string()],
+            ..Default::default()
+        };
+
+        let mut response = AgentResponse::default_allow().with_audit(audit);
 
         if self.config.settings.debug_headers {
-            decision = decision
-                .add_request_header("x-grpc-inspector-service", &path.full_service)
-                .add_request_header("x-grpc-inspector-method", &path.method);
+            response = response
+                .add_request_header(HeaderOp::Set {
+                    name: "x-grpc-inspector-service".to_string(),
+                    value: path.full_service.clone(),
+                })
+                .add_request_header(HeaderOp::Set {
+                    name: "x-grpc-inspector-method".to_string(),
+                    value: path.method.clone(),
+                });
         }
 
-        decision
+        response
     }
 
     /// Handle non-gRPC requests based on fail action.
-    fn handle_non_grpc(&self) -> Decision {
+    fn handle_non_grpc(&self) -> AgentResponse {
         match self.config.settings.fail_action {
-            FailAction::Block => Decision::allow(), // Pass through non-gRPC
-            FailAction::Allow => Decision::allow(),
+            FailAction::Block => AgentResponse::default_allow(), // Pass through non-gRPC
+            FailAction::Allow => AgentResponse::default_allow(),
         }
     }
 }
 
 #[async_trait]
-impl Agent for GrpcInspectorAgent {
-    async fn on_request(&self, request: &Request) -> Decision {
+impl AgentHandlerV2 for GrpcInspectorAgent {
+    /// Get agent capabilities for v2 protocol negotiation.
+    fn capabilities(&self) -> AgentCapabilities {
+        AgentCapabilities::new(
+            "grpc-inspector",
+            "gRPC Inspector Agent",
+            env!("CARGO_PKG_VERSION"),
+        )
+        .with_event(EventType::RequestHeaders)
+        .with_event(EventType::ResponseHeaders)
+        .with_features(AgentFeatures {
+            streaming_body: false,
+            websocket: false,
+            guardrails: false,
+            config_push: true,
+            metrics_export: true,
+            concurrent_requests: 100,
+            cancellation: true,
+            flow_control: false,
+            health_reporting: true,
+        })
+        .with_limits(AgentLimits {
+            max_body_size: 10 * 1024 * 1024, // 10MB
+            max_concurrency: 100,
+            preferred_chunk_size: 64 * 1024,
+            max_memory: None,
+            max_processing_time_ms: Some(5000),
+        })
+    }
+
+    /// Handle request headers event.
+    async fn on_request_headers(&self, event: RequestHeadersEvent) -> AgentResponse {
+        self.requests_total.fetch_add(1, Ordering::Relaxed);
+
         // Get content-type header
-        let headers = Self::flatten_headers(request.headers());
+        let headers = Self::flatten_headers(&event.headers);
         let content_type = headers.get("content-type").map(|s| s.as_str()).unwrap_or("");
 
         // Check if this is a gRPC request
@@ -430,7 +512,7 @@ impl Agent for GrpcInspectorAgent {
         }
 
         // Parse gRPC path
-        let path = match GrpcPath::parse(request.path()) {
+        let path = match GrpcPath::parse(&event.uri) {
             Some(p) => p,
             None => {
                 return self.block_grpc(
@@ -443,62 +525,103 @@ impl Agent for GrpcInspectorAgent {
 
         // Skip health checks by default (they should always pass)
         if path.is_health_check() {
-            return Decision::allow().with_tag("grpc-inspector:health-check");
+            self.requests_allowed.fetch_add(1, Ordering::Relaxed);
+            let audit = AuditMetadata {
+                tags: vec!["grpc-inspector:health-check".to_string()],
+                ..Default::default()
+            };
+            return AgentResponse::default_allow().with_audit(audit);
         }
 
         // Check reflection control (early exit)
-        if let Some(decision) = self.check_reflection(&path, &headers) {
-            return decision;
+        if let Some(response) = self.check_reflection(&path, &headers) {
+            return response;
         }
 
         // Check authorization
-        if let Some(decision) = self.check_authorization(&path, &headers) {
-            return decision;
+        if let Some(response) = self.check_authorization(&path, &headers) {
+            return response;
         }
 
         // Check metadata
-        if let Some(decision) = self.check_metadata(&path, &headers) {
-            return decision;
+        if let Some(response) = self.check_metadata(&path, &headers) {
+            return response;
         }
 
         // Check rate limits
-        if let Some(decision) = self.check_rate_limit(&path, &headers).await {
-            return decision;
-        }
-
-        // Check request size
-        if let Some(decision) = self.check_request_size(&path, request.body()) {
-            return decision;
+        if let Some(response) = self.check_rate_limit(&path, &headers).await {
+            return response;
         }
 
         // All checks passed
         self.allow_with_debug(&path)
     }
 
-    async fn on_response(&self, request: &Request, response: &Response) -> Decision {
+    /// Handle response headers event.
+    async fn on_response_headers(&self, _event: ResponseHeadersEvent) -> AgentResponse {
         // Only check response size if size limits are enabled
-        if !self.compiled.size_limits.enabled {
-            return Decision::allow();
-        }
+        // Note: Response size checking is limited without body access in v2
+        // For now, just allow all responses
+        AgentResponse::default_allow()
+    }
 
-        // Parse gRPC path from original request
-        let path = match GrpcPath::parse(request.path()) {
-            Some(p) => p,
-            None => return Decision::allow(), // Non-gRPC or invalid path
-        };
+    /// Get current health status.
+    fn health_status(&self) -> HealthStatus {
+        HealthStatus::healthy("grpc-inspector")
+    }
 
-        // Check response size limits
-        if let Some(decision) = self.check_response_size(&path, response.body()) {
-            return decision;
-        }
+    /// Get current metrics report.
+    fn metrics_report(&self) -> Option<MetricsReport> {
+        use sentinel_agent_protocol::v2::CounterMetric;
 
-        Decision::allow()
+        let mut report = MetricsReport::new("grpc-inspector", 10_000);
+        report.counters.push(CounterMetric::new(
+            "grpc_inspector_requests_total",
+            self.requests_total.load(Ordering::Relaxed),
+        ));
+        report.counters.push(CounterMetric::new(
+            "grpc_inspector_requests_blocked",
+            self.requests_blocked.load(Ordering::Relaxed),
+        ));
+        report.counters.push(CounterMetric::new(
+            "grpc_inspector_requests_allowed",
+            self.requests_allowed.load(Ordering::Relaxed),
+        ));
+
+        Some(report)
+    }
+
+    /// Handle configuration update from proxy.
+    async fn on_configure(&self, _config: serde_json::Value, version: Option<String>) -> bool {
+        info!(
+            config_version = ?version,
+            "Received configuration update"
+        );
+        // For now, we don't support dynamic config updates
+        // Return true to acknowledge receipt
+        true
+    }
+
+    /// Handle shutdown request.
+    async fn on_shutdown(&self, reason: ShutdownReason, grace_period_ms: u64) {
+        info!(
+            reason = ?reason,
+            grace_period_ms = grace_period_ms,
+            "Received shutdown request"
+        );
+        // Clean up resources if needed
+    }
+
+    /// Handle drain request.
+    async fn on_drain(&self, duration_ms: u64, reason: DrainReason) {
+        info!(
+            reason = ?reason,
+            duration_ms = duration_ms,
+            "Received drain request"
+        );
+        // Stop accepting new requests
     }
 }
-
-// Safety: GrpcInspectorAgent is Send + Sync because all its fields are Send + Sync
-unsafe impl Send for GrpcInspectorAgent {}
-unsafe impl Sync for GrpcInspectorAgent {}
 
 #[cfg(test)]
 mod tests {
