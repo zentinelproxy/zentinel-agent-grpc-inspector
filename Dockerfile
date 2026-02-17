@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.4
 
-# Sentinel gRPC Inspector Agent Container Image
+# Zentinel gRPC Inspector Agent Container Image
 #
 # Targets:
 #   - prebuilt: For CI with pre-built binaries
@@ -10,16 +10,16 @@
 ################################################################################
 FROM gcr.io/distroless/cc-debian12:nonroot AS prebuilt
 
-COPY sentinel-agent-grpc-inspector /sentinel-agent-grpc-inspector
+COPY zentinel-agent-grpc-inspector /zentinel-agent-grpc-inspector
 
-LABEL org.opencontainers.image.title="Sentinel gRPC Inspector Agent" \
-      org.opencontainers.image.description="Sentinel gRPC Inspector Agent for Sentinel reverse proxy" \
+LABEL org.opencontainers.image.title="Zentinel gRPC Inspector Agent" \
+      org.opencontainers.image.description="Zentinel gRPC Inspector Agent for Zentinel reverse proxy" \
       org.opencontainers.image.vendor="Raskell" \
-      org.opencontainers.image.source="https://github.com/raskell-io/sentinel-agent-grpc-inspector"
+      org.opencontainers.image.source="https://github.com/zentinelproxy/zentinel-agent-grpc-inspector"
 
-ENV RUST_LOG=info,sentinel_agent_grpc_inspector=debug \
-    SOCKET_PATH=/var/run/sentinel/grpc-inspector.sock
+ENV RUST_LOG=info,zentinel_agent_grpc_inspector=debug \
+    SOCKET_PATH=/var/run/zentinel/grpc-inspector.sock
 
 USER nonroot:nonroot
 
-ENTRYPOINT ["/sentinel-agent-grpc-inspector"]
+ENTRYPOINT ["/zentinel-agent-grpc-inspector"]

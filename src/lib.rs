@@ -1,4 +1,4 @@
-//! gRPC Inspector Agent for Sentinel.
+//! gRPC Inspector Agent for Zentinel.
 //!
 //! Provides security controls for gRPC services including:
 //! - Method-level authorization

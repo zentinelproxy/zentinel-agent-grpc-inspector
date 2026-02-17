@@ -1,20 +1,20 @@
-//! Integration tests for the Sentinel gRPC Inspector Agent.
+//! Integration tests for the Zentinel gRPC Inspector Agent.
 //!
 //! These tests verify the complete functionality of the gRPC inspector,
 //! including configuration parsing, path matching, authorization rules,
 //! size limits, metadata inspection, rate limiting, and reflection control.
 
-use sentinel_agent_grpc_inspector::{Config, GrpcInspectorAgent};
-use sentinel_agent_grpc_inspector::config::{
+use zentinel_agent_grpc_inspector::{Config, GrpcInspectorAgent};
+use zentinel_agent_grpc_inspector::config::{
     Action, AuthorizationConfig, AuthorizationRule, FailAction,
     MetadataConfig, MetadataRequirement, MethodRateLimit,
     MethodSizeLimit, RateLimitKeyType, RateLimitingConfig, ReflectionConfig,
     ReflectionMetadata, RequirementType, Settings, SizeLimitsConfig,
 };
-use sentinel_agent_grpc_inspector::grpc::{
+use zentinel_agent_grpc_inspector::grpc::{
     GrpcPath, GrpcStatus, is_grpc_content_type, is_grpc_web_content_type, parse_message_size,
 };
-use sentinel_agent_grpc_inspector::matchers::CompiledConfig;
+use zentinel_agent_grpc_inspector::matchers::CompiledConfig;
 use std::collections::HashMap;
 
 // =============================================================================

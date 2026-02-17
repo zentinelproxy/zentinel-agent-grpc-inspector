@@ -2,15 +2,15 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use sentinel_agent_grpc_inspector::{Config, GrpcInspectorAgent};
-use sentinel_agent_protocol::v2::GrpcAgentServerV2;
+use zentinel_agent_grpc_inspector::{Config, GrpcInspectorAgent};
+use zentinel_agent_protocol::v2::GrpcAgentServerV2;
 use std::path::PathBuf;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
-#[command(name = "sentinel-agent-grpc-inspector")]
-#[command(about = "gRPC security agent for Sentinel (v2 protocol)")]
+#[command(name = "zentinel-agent-grpc-inspector")]
+#[command(about = "gRPC security agent for Zentinel (v2 protocol)")]
 #[command(version)]
 struct Args {
     /// Path to configuration file
@@ -40,7 +40,7 @@ struct Args {
 
 fn print_example_config() {
     let example = r#"# gRPC Inspector Agent Configuration
-# See https://sentinel.raskell.io/agents/grpc-inspector/ for full documentation
+# See https://zentinelproxy.io/agents/grpc-inspector/ for full documentation
 
 settings:
   fail_action: block        # block or allow (detect-only mode)

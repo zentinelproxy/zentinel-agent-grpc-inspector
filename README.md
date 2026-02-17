@@ -1,6 +1,6 @@
-# gRPC Inspector Agent for Sentinel
+# gRPC Inspector Agent for Zentinel
 
-A security agent for [Sentinel](https://sentinel.raskell.io) that provides comprehensive security controls for gRPC services.
+A security agent for [Zentinel](https://zentinelproxy.io) that provides comprehensive security controls for gRPC services.
 
 ## Features
 
@@ -13,14 +13,14 @@ A security agent for [Sentinel](https://sentinel.raskell.io) that provides compr
 ## Installation
 
 ```bash
-cargo install sentinel-agent-grpc-inspector
+cargo install zentinel-agent-grpc-inspector
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/raskell-io/sentinel-agent-grpc-inspector.git
-cd sentinel-agent-grpc-inspector
+git clone https://github.com/zentinelproxy/zentinel-agent-grpc-inspector.git
+cd zentinel-agent-grpc-inspector
 cargo build --release
 ```
 
@@ -28,19 +28,19 @@ cargo build --release
 
 ```bash
 # Run with default config file (grpc-inspector.yaml)
-sentinel-agent-grpc-inspector
+zentinel-agent-grpc-inspector
 
 # Specify config file
-sentinel-agent-grpc-inspector -c /path/to/config.yaml
+zentinel-agent-grpc-inspector -c /path/to/config.yaml
 
 # Specify socket path
-sentinel-agent-grpc-inspector -s /tmp/grpc-inspector.sock
+zentinel-agent-grpc-inspector -s /tmp/grpc-inspector.sock
 
 # Print example configuration
-sentinel-agent-grpc-inspector --print-config
+zentinel-agent-grpc-inspector --print-config
 
 # Validate configuration
-sentinel-agent-grpc-inspector --validate
+zentinel-agent-grpc-inspector --validate
 ```
 
 ## Configuration
@@ -181,14 +181,14 @@ When blocking requests, the agent returns appropriate gRPC status codes:
 | Request too large | RESOURCE_EXHAUSTED | 8 |
 | Invalid request | INVALID_ARGUMENT | 3 |
 
-## Sentinel Configuration
+## Zentinel Configuration
 
-Add the agent to your Sentinel proxy configuration:
+Add the agent to your Zentinel proxy configuration:
 
 ```yaml
 agents:
   - name: grpc-inspector
-    socket: /tmp/sentinel-grpc-inspector.sock
+    socket: /tmp/zentinel-grpc-inspector.sock
     on_request: true
     on_response: false
 ```

@@ -5,11 +5,11 @@ use crate::grpc::{is_grpc_content_type, parse_message_size, GrpcPath, GrpcStatus
 use crate::matchers::CompiledConfig;
 use crate::rate_limiter::{RateLimitKey, RateLimitResult, RateLimiter};
 use async_trait::async_trait;
-use sentinel_agent_protocol::v2::{
+use zentinel_agent_protocol::v2::{
     AgentCapabilities, AgentFeatures, AgentHandlerV2, AgentLimits, DrainReason,
     HealthStatus, MetricsReport, ShutdownReason,
 };
-use sentinel_agent_protocol::{
+use zentinel_agent_protocol::{
     AgentResponse, AuditMetadata, EventType, HeaderOp, RequestHeadersEvent, ResponseHeadersEvent,
 };
 use std::collections::HashMap;
@@ -572,7 +572,7 @@ impl AgentHandlerV2 for GrpcInspectorAgent {
 
     /// Get current metrics report.
     fn metrics_report(&self) -> Option<MetricsReport> {
-        use sentinel_agent_protocol::v2::CounterMetric;
+        use zentinel_agent_protocol::v2::CounterMetric;
 
         let mut report = MetricsReport::new("grpc-inspector", 10_000);
         report.counters.push(CounterMetric::new(
