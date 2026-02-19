@@ -28,19 +28,19 @@ cargo build --release
 
 ```bash
 # Run with default config file (grpc-inspector.yaml)
-zentinel-agent-grpc-inspector
+zentinel-grpc-inspector-agent
 
 # Specify config file
-zentinel-agent-grpc-inspector -c /path/to/config.yaml
+zentinel-grpc-inspector-agent -c /path/to/config.yaml
 
 # Specify socket path
-zentinel-agent-grpc-inspector -s /tmp/grpc-inspector.sock
+zentinel-grpc-inspector-agent -s /tmp/grpc-inspector.sock
 
 # Print example configuration
-zentinel-agent-grpc-inspector --print-config
+zentinel-grpc-inspector-agent --print-config
 
 # Validate configuration
-zentinel-agent-grpc-inspector --validate
+zentinel-grpc-inspector-agent --validate
 ```
 
 ## Configuration

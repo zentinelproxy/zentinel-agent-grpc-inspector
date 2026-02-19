@@ -10,7 +10,7 @@
 ################################################################################
 FROM gcr.io/distroless/cc-debian12:nonroot AS prebuilt
 
-COPY zentinel-agent-grpc-inspector /zentinel-agent-grpc-inspector
+COPY zentinel-grpc-inspector-agent /zentinel-grpc-inspector-agent
 
 LABEL org.opencontainers.image.title="Zentinel gRPC Inspector Agent" \
       org.opencontainers.image.description="Zentinel gRPC Inspector Agent for Zentinel reverse proxy" \
@@ -22,4 +22,4 @@ ENV RUST_LOG=info,zentinel_agent_grpc_inspector=debug \
 
 USER nonroot:nonroot
 
-ENTRYPOINT ["/zentinel-agent-grpc-inspector"]
+ENTRYPOINT ["/zentinel-grpc-inspector-agent"]
