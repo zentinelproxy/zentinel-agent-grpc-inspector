@@ -12,14 +12,28 @@ A security agent for [Zentinel](https://zentinelproxy.io) that provides comprehe
 
 ## Installation
 
+### Using Bundle (Recommended)
+
+```bash
+# Install just this agent
+zentinel bundle install grpc-inspector
+
+# Or install all bundled agents
+zentinel bundle install
+```
+
+The bundle command downloads the correct binary for your platform and places it in the standard location. See the [bundle documentation](https://zentinelproxy.io/docs/deployment/bundle/) for details.
+
+### Using Cargo
+
 ```bash
 cargo install zentinel-agent-grpc-inspector
 ```
 
-Or build from source:
+### From Source
 
 ```bash
-git clone https://github.com/zentinelproxy/zentinel-agent-grpc-inspector.git
+git clone https://github.com/zentinelproxy/zentinel-agent-grpc-inspector
 cd zentinel-agent-grpc-inspector
 cargo build --release
 ```
@@ -33,7 +47,10 @@ zentinel-grpc-inspector-agent
 # Specify config file
 zentinel-grpc-inspector-agent -c /path/to/config.yaml
 
-# Specify socket path
+# Listen on gRPC (recommended)
+zentinel-grpc-inspector-agent -g 127.0.0.1:50051
+
+# Specify socket path (requires v2 UDS support — use gRPC if unsure)
 zentinel-grpc-inspector-agent -s /tmp/grpc-inspector.sock
 
 # Print example configuration
@@ -185,12 +202,13 @@ When blocking requests, the agent returns appropriate gRPC status codes:
 
 Add the agent to your Zentinel proxy configuration:
 
-```yaml
-agents:
-  - name: grpc-inspector
-    socket: /tmp/zentinel-grpc-inspector.sock
-    on_request: true
-    on_response: false
+```kdl
+agent "grpc-inspector" type="custom" {
+    grpc "http://127.0.0.1:50051"
+    events "request_headers" "request_body"
+    timeout-ms 100
+    failure-mode "open"
+}
 ```
 
 ## Testing
