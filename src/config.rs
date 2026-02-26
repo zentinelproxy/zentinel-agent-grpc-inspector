@@ -628,13 +628,13 @@ impl ReflectionConfig {
         for (i, client) in self.allowed_clients.iter().enumerate() {
             // Try to parse as IP or CIDR
             if client.contains('/') {
-                client
-                    .parse::<ipnet::IpNet>()
-                    .map_err(|e| anyhow::anyhow!("Invalid CIDR at allowed_clients[{}]: {}", i, e))?;
-            } else {
-                client.parse::<std::net::IpAddr>().map_err(|e| {
-                    anyhow::anyhow!("Invalid IP at allowed_clients[{}]: {}", i, e)
+                client.parse::<ipnet::IpNet>().map_err(|e| {
+                    anyhow::anyhow!("Invalid CIDR at allowed_clients[{}]: {}", i, e)
                 })?;
+            } else {
+                client
+                    .parse::<std::net::IpAddr>()
+                    .map_err(|e| anyhow::anyhow!("Invalid IP at allowed_clients[{}]: {}", i, e))?;
             }
         }
         Ok(())

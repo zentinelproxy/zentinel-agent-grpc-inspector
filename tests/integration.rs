@@ -4,18 +4,17 @@
 //! including configuration parsing, path matching, authorization rules,
 //! size limits, metadata inspection, rate limiting, and reflection control.
 
-use zentinel_agent_grpc_inspector::{Config, GrpcInspectorAgent};
+use std::collections::HashMap;
 use zentinel_agent_grpc_inspector::config::{
-    Action, AuthorizationConfig, AuthorizationRule, FailAction,
-    MetadataConfig, MetadataRequirement, MethodRateLimit,
-    MethodSizeLimit, RateLimitKeyType, RateLimitingConfig, ReflectionConfig,
-    ReflectionMetadata, RequirementType, Settings, SizeLimitsConfig,
+    Action, AuthorizationConfig, AuthorizationRule, FailAction, MetadataConfig,
+    MetadataRequirement, MethodRateLimit, MethodSizeLimit, RateLimitKeyType, RateLimitingConfig,
+    ReflectionConfig, ReflectionMetadata, RequirementType, Settings, SizeLimitsConfig,
 };
 use zentinel_agent_grpc_inspector::grpc::{
-    GrpcPath, GrpcStatus, is_grpc_content_type, is_grpc_web_content_type, parse_message_size,
+    is_grpc_content_type, is_grpc_web_content_type, parse_message_size, GrpcPath, GrpcStatus,
 };
 use zentinel_agent_grpc_inspector::matchers::CompiledConfig;
-use std::collections::HashMap;
+use zentinel_agent_grpc_inspector::{Config, GrpcInspectorAgent};
 
 // =============================================================================
 // Configuration Tests
@@ -161,7 +160,10 @@ authorization:
     let config: Config = serde_yaml::from_str(yaml).unwrap();
     let result = config.validate();
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Either 'service' or 'service_pattern'"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Either 'service' or 'service_pattern'"));
 }
 
 #[test]
@@ -186,7 +188,10 @@ rate_limiting:
     let config: Config = serde_yaml::from_str(yaml).unwrap();
     let result = config.validate();
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("key_metadata_name"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("key_metadata_name"));
 }
 
 // =============================================================================
@@ -218,7 +223,8 @@ fn test_grpc_path_reflection_detection() {
     assert!(v1.is_reflection());
     assert!(!v1.is_health_check());
 
-    let v1alpha = GrpcPath::parse("/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo").unwrap();
+    let v1alpha =
+        GrpcPath::parse("/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo").unwrap();
     assert!(v1alpha.is_reflection());
 }
 
@@ -247,7 +253,7 @@ fn test_grpc_content_type_detection() {
     assert!(is_grpc_content_type("application/grpc"));
     assert!(is_grpc_content_type("application/grpc+proto"));
     assert!(is_grpc_content_type("application/grpc+json"));
-    assert!(is_grpc_content_type("Application/GRPC"));  // case insensitive
+    assert!(is_grpc_content_type("Application/GRPC")); // case insensitive
 
     assert!(!is_grpc_content_type("application/json"));
     assert!(!is_grpc_content_type("text/plain"));
@@ -343,17 +349,15 @@ fn test_method_matching_via_authorization_wildcard() {
     let config = AuthorizationConfig {
         enabled: true,
         default_action: Action::Deny,
-        rules: vec![
-            AuthorizationRule {
-                service: Some("myapp.UserService".to_string()),
-                service_pattern: None,
-                methods: vec!["*".to_string()],  // Wildcard
-                action: Action::Allow,
-                require_metadata: vec![],
-                require_roles: None,
-                roles_header: None,
-            },
-        ],
+        rules: vec![AuthorizationRule {
+            service: Some("myapp.UserService".to_string()),
+            service_pattern: None,
+            methods: vec!["*".to_string()], // Wildcard
+            action: Action::Allow,
+            require_metadata: vec![],
+            require_roles: None,
+            roles_header: None,
+        }],
     };
 
     let compiled = CompiledConfig::new(
@@ -381,17 +385,15 @@ fn test_method_matching_via_authorization_exact() {
     let config = AuthorizationConfig {
         enabled: true,
         default_action: Action::Deny,
-        rules: vec![
-            AuthorizationRule {
-                service: Some("myapp.UserService".to_string()),
-                service_pattern: None,
-                methods: vec!["GetUser".to_string()],  // Exact
-                action: Action::Allow,
-                require_metadata: vec![],
-                require_roles: None,
-                roles_header: None,
-            },
-        ],
+        rules: vec![AuthorizationRule {
+            service: Some("myapp.UserService".to_string()),
+            service_pattern: None,
+            methods: vec!["GetUser".to_string()], // Exact
+            action: Action::Allow,
+            require_metadata: vec![],
+            require_roles: None,
+            roles_header: None,
+        }],
     };
 
     let compiled = CompiledConfig::new(
@@ -416,17 +418,15 @@ fn test_method_matching_via_authorization_glob() {
     let config = AuthorizationConfig {
         enabled: true,
         default_action: Action::Deny,
-        rules: vec![
-            AuthorizationRule {
-                service: Some("myapp.UserService".to_string()),
-                service_pattern: None,
-                methods: vec!["Delete*".to_string()],  // Glob pattern
-                action: Action::Deny,
-                require_metadata: vec![],
-                require_roles: None,
-                roles_header: None,
-            },
-        ],
+        rules: vec![AuthorizationRule {
+            service: Some("myapp.UserService".to_string()),
+            service_pattern: None,
+            methods: vec!["Delete*".to_string()], // Glob pattern
+            action: Action::Deny,
+            require_metadata: vec![],
+            require_roles: None,
+            roles_header: None,
+        }],
     };
 
     let compiled = CompiledConfig::new(
@@ -459,24 +459,20 @@ fn test_metadata_requirement_present_via_config() {
     let config = AuthorizationConfig {
         enabled: true,
         default_action: Action::Deny,
-        rules: vec![
-            AuthorizationRule {
-                service: Some("myapp.UserService".to_string()),
-                service_pattern: None,
-                methods: vec!["*".to_string()],
-                action: Action::Allow,
-                require_metadata: vec![
-                    MetadataRequirement {
-                        name: "x-request-id".to_string(),
-                        requirement_type: RequirementType::Present,
-                        value: None,
-                        pattern: None,
-                    },
-                ],
-                require_roles: None,
-                roles_header: None,
-            },
-        ],
+        rules: vec![AuthorizationRule {
+            service: Some("myapp.UserService".to_string()),
+            service_pattern: None,
+            methods: vec!["*".to_string()],
+            action: Action::Allow,
+            require_metadata: vec![MetadataRequirement {
+                name: "x-request-id".to_string(),
+                requirement_type: RequirementType::Present,
+                value: None,
+                pattern: None,
+            }],
+            require_roles: None,
+            roles_header: None,
+        }],
     };
 
     let compiled = CompiledConfig::new(
@@ -508,24 +504,20 @@ fn test_metadata_requirement_exact_via_config() {
     let config = AuthorizationConfig {
         enabled: true,
         default_action: Action::Deny,
-        rules: vec![
-            AuthorizationRule {
-                service: Some("myapp.UserService".to_string()),
-                service_pattern: None,
-                methods: vec!["*".to_string()],
-                action: Action::Allow,
-                require_metadata: vec![
-                    MetadataRequirement {
-                        name: "x-api-version".to_string(),
-                        requirement_type: RequirementType::Exact,
-                        value: Some("v2".to_string()),
-                        pattern: None,
-                    },
-                ],
-                require_roles: None,
-                roles_header: None,
-            },
-        ],
+        rules: vec![AuthorizationRule {
+            service: Some("myapp.UserService".to_string()),
+            service_pattern: None,
+            methods: vec!["*".to_string()],
+            action: Action::Allow,
+            require_metadata: vec![MetadataRequirement {
+                name: "x-api-version".to_string(),
+                requirement_type: RequirementType::Exact,
+                value: Some("v2".to_string()),
+                pattern: None,
+            }],
+            require_roles: None,
+            roles_header: None,
+        }],
     };
 
     let compiled = CompiledConfig::new(
@@ -617,17 +609,15 @@ fn test_compiled_authorization_regex_service() {
     let config = AuthorizationConfig {
         enabled: true,
         default_action: Action::Allow,
-        rules: vec![
-            AuthorizationRule {
-                service: None,
-                service_pattern: Some(r"^myapp\.internal\..*".to_string()),
-                methods: vec!["*".to_string()],
-                action: Action::Deny,
-                require_metadata: vec![],
-                require_roles: None,
-                roles_header: None,
-            },
-        ],
+        rules: vec![AuthorizationRule {
+            service: None,
+            service_pattern: Some(r"^myapp\.internal\..*".to_string()),
+            methods: vec!["*".to_string()],
+            action: Action::Deny,
+            require_metadata: vec![],
+            require_roles: None,
+            roles_header: None,
+        }],
     };
 
     let compiled = CompiledConfig::new(
@@ -682,18 +672,36 @@ fn test_compiled_size_limits() {
 
     // Upload: custom request limit, default response limit
     let upload = GrpcPath::parse("/myapp.FileService/Upload").unwrap();
-    assert_eq!(compiled.size_limits.get_max_request_bytes(&upload), 100_000_000);
-    assert_eq!(compiled.size_limits.get_max_response_bytes(&upload), 8_000_000);
+    assert_eq!(
+        compiled.size_limits.get_max_request_bytes(&upload),
+        100_000_000
+    );
+    assert_eq!(
+        compiled.size_limits.get_max_response_bytes(&upload),
+        8_000_000
+    );
 
     // Download: default request limit, custom response limit
     let download = GrpcPath::parse("/myapp.FileService/Download").unwrap();
-    assert_eq!(compiled.size_limits.get_max_request_bytes(&download), 4_000_000);
-    assert_eq!(compiled.size_limits.get_max_response_bytes(&download), 500_000_000);
+    assert_eq!(
+        compiled.size_limits.get_max_request_bytes(&download),
+        4_000_000
+    );
+    assert_eq!(
+        compiled.size_limits.get_max_response_bytes(&download),
+        500_000_000
+    );
 
     // Other method: default limits
     let other = GrpcPath::parse("/myapp.UserService/GetUser").unwrap();
-    assert_eq!(compiled.size_limits.get_max_request_bytes(&other), 4_000_000);
-    assert_eq!(compiled.size_limits.get_max_response_bytes(&other), 8_000_000);
+    assert_eq!(
+        compiled.size_limits.get_max_request_bytes(&other),
+        4_000_000
+    );
+    assert_eq!(
+        compiled.size_limits.get_max_response_bytes(&other),
+        8_000_000
+    );
 }
 
 #[test]
@@ -704,18 +712,16 @@ fn test_compiled_rate_limiting() {
         default_window_seconds: 60,
         key_type: RateLimitKeyType::ClientIp,
         key_metadata_name: None,
-        per_method: vec![
-            MethodRateLimit {
-                service: "myapp.AuthService".to_string(),
-                method: Some("Login".to_string()),
-                methods: vec![],
-                limit: 10,
-                window_seconds: 60,
-                burst: 5,
-                key_type: None,
-                key_metadata_name: None,
-            },
-        ],
+        per_method: vec![MethodRateLimit {
+            service: "myapp.AuthService".to_string(),
+            method: Some("Login".to_string()),
+            methods: vec![],
+            limit: 10,
+            window_seconds: 60,
+            burst: 5,
+            key_type: None,
+            key_metadata_name: None,
+        }],
     };
 
     let compiled = CompiledConfig::new(
@@ -766,7 +772,9 @@ fn test_compiled_reflection_ip_access() {
 
     // CIDR match - 10.x.x.x
     assert!(compiled.reflection.is_client_allowed(Some("10.0.0.1")));
-    assert!(compiled.reflection.is_client_allowed(Some("10.255.255.255")));
+    assert!(compiled
+        .reflection
+        .is_client_allowed(Some("10.255.255.255")));
 
     // CIDR match - 192.168.1.x
     assert!(compiled.reflection.is_client_allowed(Some("192.168.1.1")));
@@ -804,17 +812,15 @@ async fn test_agent_creation_with_full_config() {
         authorization: AuthorizationConfig {
             enabled: true,
             default_action: Action::Deny,
-            rules: vec![
-                AuthorizationRule {
-                    service: Some("myapp.UserService".to_string()),
-                    service_pattern: None,
-                    methods: vec!["*".to_string()],
-                    action: Action::Allow,
-                    require_metadata: vec![],
-                    require_roles: None,
-                    roles_header: None,
-                },
-            ],
+            rules: vec![AuthorizationRule {
+                service: Some("myapp.UserService".to_string()),
+                service_pattern: None,
+                methods: vec!["*".to_string()],
+                action: Action::Allow,
+                require_metadata: vec![],
+                require_roles: None,
+                roles_header: None,
+            }],
         },
         size_limits: SizeLimitsConfig {
             enabled: true,
@@ -854,7 +860,10 @@ authorization:
     assert!(config.validate().is_ok());
 
     let rule = &config.authorization.rules[0];
-    assert_eq!(rule.require_roles, Some(vec!["admin".to_string(), "superuser".to_string()]));
+    assert_eq!(
+        rule.require_roles,
+        Some(vec!["admin".to_string(), "superuser".to_string()])
+    );
     assert_eq!(rule.roles_header, Some("x-user-roles".to_string()));
 }
 
@@ -932,7 +941,10 @@ fn test_empty_config_uses_defaults() {
     // All defaults
     assert_eq!(config.settings.fail_action, FailAction::Block);
     assert!(!config.authorization.enabled);
-    assert_eq!(config.size_limits.default_max_request_bytes, 4 * 1024 * 1024);
+    assert_eq!(
+        config.size_limits.default_max_request_bytes,
+        4 * 1024 * 1024
+    );
 }
 
 #[test]

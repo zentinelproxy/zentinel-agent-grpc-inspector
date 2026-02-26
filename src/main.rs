@@ -2,11 +2,11 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use zentinel_agent_grpc_inspector::{Config, GrpcInspectorAgent};
-use zentinel_agent_protocol::v2::GrpcAgentServerV2;
 use std::path::PathBuf;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use zentinel_agent_grpc_inspector::{Config, GrpcInspectorAgent};
+use zentinel_agent_protocol::v2::GrpcAgentServerV2;
 
 #[derive(Parser, Debug)]
 #[command(name = "zentinel-agent-grpc-inspector")]
@@ -22,7 +22,12 @@ struct Args {
     socket: Option<PathBuf>,
 
     /// gRPC address to listen on (e.g., "0.0.0.0:50051")
-    #[arg(short = 'g', long, env = "GRPC_INSPECTOR_GRPC_ADDRESS", conflicts_with = "socket")]
+    #[arg(
+        short = 'g',
+        long,
+        env = "GRPC_INSPECTOR_GRPC_ADDRESS",
+        conflicts_with = "socket"
+    )]
     grpc_address: Option<String>,
 
     /// Log level (trace, debug, info, warn, error)
@@ -150,8 +155,8 @@ async fn main() -> Result<()> {
     }
 
     // Initialize logging
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&args.log_level));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&args.log_level));
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -179,10 +184,13 @@ async fn main() -> Result<()> {
 
             // For UDS transport, we'd use AgentServerV2Uds when available
             // For now, fall back to gRPC server on localhost
-            let addr = "127.0.0.1:0".parse()
+            let addr = "127.0.0.1:0"
+                .parse()
                 .context("Failed to parse fallback address")?;
             let server = GrpcAgentServerV2::new("grpc-inspector", Box::new(agent));
-            server.run(addr).await
+            server
+                .run(addr)
+                .await
                 .context("Failed to run gRPC Inspector agent")?;
         }
         (None, Some(grpc_addr)) => {
@@ -198,7 +206,9 @@ async fn main() -> Result<()> {
                 .context("Invalid gRPC address format (expected host:port)")?;
 
             let server = GrpcAgentServerV2::new("grpc-inspector", Box::new(agent));
-            server.run(addr).await
+            server
+                .run(addr)
+                .await
                 .context("Failed to run gRPC Inspector agent")?;
         }
         (None, None) => {
@@ -215,7 +225,9 @@ async fn main() -> Result<()> {
                 .context("Failed to parse default address")?;
 
             let server = GrpcAgentServerV2::new("grpc-inspector", Box::new(agent));
-            server.run(addr).await
+            server
+                .run(addr)
+                .await
                 .context("Failed to run gRPC Inspector agent")?;
         }
         (Some(_), Some(_)) => {

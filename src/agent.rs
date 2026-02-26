@@ -5,17 +5,17 @@ use crate::grpc::{is_grpc_content_type, parse_message_size, GrpcPath, GrpcStatus
 use crate::matchers::CompiledConfig;
 use crate::rate_limiter::{RateLimitKey, RateLimitResult, RateLimiter};
 use async_trait::async_trait;
-use zentinel_agent_protocol::v2::{
-    AgentCapabilities, AgentFeatures, AgentHandlerV2, AgentLimits, DrainReason,
-    HealthStatus, MetricsReport, ShutdownReason,
-};
-use zentinel_agent_protocol::{
-    AgentResponse, AuditMetadata, EventType, HeaderOp, RequestHeadersEvent, ResponseHeadersEvent,
-};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+use zentinel_agent_protocol::v2::{
+    AgentCapabilities, AgentFeatures, AgentHandlerV2, AgentLimits, DrainReason, HealthStatus,
+    MetricsReport, ShutdownReason,
+};
+use zentinel_agent_protocol::{
+    AgentResponse, AuditMetadata, EventType, HeaderOp, RequestHeadersEvent, ResponseHeadersEvent,
+};
 
 /// gRPC Inspector agent.
 pub struct GrpcInspectorAgent {
@@ -196,7 +196,11 @@ impl GrpcInspectorAgent {
 
         // Check if client IP is in allowlist
         let client_ip = Self::get_client_ip(headers);
-        if self.compiled.reflection.is_client_allowed(client_ip.as_deref()) {
+        if self
+            .compiled
+            .reflection
+            .is_client_allowed(client_ip.as_deref())
+        {
             debug!(client_ip = ?client_ip, "Reflection allowed for client IP");
             return None;
         }
@@ -289,10 +293,11 @@ impl GrpcInspectorAgent {
                     method_limit
                         .key_type
                         .unwrap_or(self.compiled.rate_limiting.default_key_type),
-                    method_limit
-                        .key_metadata_name
-                        .as_ref()
-                        .or(self.compiled.rate_limiting.default_key_metadata_name.as_ref()),
+                    method_limit.key_metadata_name.as_ref().or(self
+                        .compiled
+                        .rate_limiting
+                        .default_key_metadata_name
+                        .as_ref()),
                 )
             } else {
                 (
@@ -300,7 +305,10 @@ impl GrpcInspectorAgent {
                     self.compiled.rate_limiting.default_window_seconds,
                     0,
                     self.compiled.rate_limiting.default_key_type,
-                    self.compiled.rate_limiting.default_key_metadata_name.as_ref(),
+                    self.compiled
+                        .rate_limiting
+                        .default_key_metadata_name
+                        .as_ref(),
                 )
             };
 
@@ -326,7 +334,11 @@ impl GrpcInspectorAgent {
 
         let key = RateLimitKey::new(&path.full_service, &path.method, &client_key);
 
-        match self.rate_limiter.check(key, limit, window_seconds, burst).await {
+        match self
+            .rate_limiter
+            .check(key, limit, window_seconds, burst)
+            .await
+        {
             RateLimitResult::Allowed { remaining } => {
                 debug!(
                     service = %path.full_service,
@@ -337,15 +349,16 @@ impl GrpcInspectorAgent {
                 None
             }
             RateLimitResult::Exceeded { retry_after_secs } => {
-                let response = self.block_grpc(
-                    GrpcStatus::ResourceExhausted,
-                    "Rate limit exceeded",
-                    "grpc-inspector:rate-limited",
-                )
-                .add_response_header(HeaderOp::Set {
-                    name: "retry-after".to_string(),
-                    value: retry_after_secs.to_string(),
-                });
+                let response = self
+                    .block_grpc(
+                        GrpcStatus::ResourceExhausted,
+                        "Rate limit exceeded",
+                        "grpc-inspector:rate-limited",
+                    )
+                    .add_response_header(HeaderOp::Set {
+                        name: "retry-after".to_string(),
+                        value: retry_after_secs.to_string(),
+                    });
                 Some(response)
             }
         }
@@ -504,7 +517,10 @@ impl AgentHandlerV2 for GrpcInspectorAgent {
 
         // Get content-type header
         let headers = Self::flatten_headers(&event.headers);
-        let content_type = headers.get("content-type").map(|s| s.as_str()).unwrap_or("");
+        let content_type = headers
+            .get("content-type")
+            .map(|s| s.as_str())
+            .unwrap_or("");
 
         // Check if this is a gRPC request
         if !is_grpc_content_type(content_type) {
@@ -656,7 +672,10 @@ authorization:
         );
 
         let flat = GrpcInspectorAgent::flatten_headers(&headers);
-        assert_eq!(flat.get("content-type"), Some(&"application/grpc".to_string()));
+        assert_eq!(
+            flat.get("content-type"),
+            Some(&"application/grpc".to_string())
+        );
         assert_eq!(flat.get("x-request-id"), Some(&"123".to_string())); // First value only
     }
 
@@ -742,8 +761,8 @@ reflection:
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         let agent = GrpcInspectorAgent::new(config);
 
-        let path = GrpcPath::parse("/grpc.reflection.v1.ServerReflection/ServerReflectionInfo")
-            .unwrap();
+        let path =
+            GrpcPath::parse("/grpc.reflection.v1.ServerReflection/ServerReflectionInfo").unwrap();
 
         // Unknown client should be blocked
         let mut headers = HashMap::new();

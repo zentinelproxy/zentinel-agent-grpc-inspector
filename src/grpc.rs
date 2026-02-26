@@ -213,8 +213,8 @@ mod tests {
 
     #[test]
     fn test_parse_reflection_service() {
-        let path = GrpcPath::parse("/grpc.reflection.v1.ServerReflection/ServerReflectionInfo")
-            .unwrap();
+        let path =
+            GrpcPath::parse("/grpc.reflection.v1.ServerReflection/ServerReflectionInfo").unwrap();
         assert!(path.is_reflection());
         assert!(!path.is_health_check());
     }

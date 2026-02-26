@@ -112,9 +112,7 @@ impl CompiledAuthRule {
             return false;
         }
 
-        self.method_matchers
-            .iter()
-            .any(|m| m.matches(&path.method))
+        self.method_matchers.iter().any(|m| m.matches(&path.method))
     }
 }
 
@@ -280,9 +278,21 @@ impl CompiledMetadata {
     fn new(config: &MetadataConfig) -> Self {
         Self {
             enabled: config.enabled,
-            required: config.required.iter().map(CompiledRequiredHeader::new).collect(),
-            forbidden: config.forbidden.iter().map(CompiledForbiddenHeader::new).collect(),
-            validation: config.validation.iter().map(CompiledHeaderValidation::new).collect(),
+            required: config
+                .required
+                .iter()
+                .map(CompiledRequiredHeader::new)
+                .collect(),
+            forbidden: config
+                .forbidden
+                .iter()
+                .map(CompiledForbiddenHeader::new)
+                .collect(),
+            validation: config
+                .validation
+                .iter()
+                .map(CompiledHeaderValidation::new)
+                .collect(),
         }
     }
 }
@@ -297,7 +307,11 @@ impl CompiledRequiredHeader {
         let apply_to = if header.apply_to.is_empty() {
             vec![MethodMatcher::All]
         } else {
-            header.apply_to.iter().map(|p| MethodMatcher::new(p)).collect()
+            header
+                .apply_to
+                .iter()
+                .map(|p| MethodMatcher::new(p))
+                .collect()
         };
         Self {
             name: header.name.to_lowercase(),
@@ -329,10 +343,17 @@ impl CompiledForbiddenHeader {
         let apply_to = if header.apply_to.is_empty() {
             vec![MethodMatcher::All]
         } else {
-            header.apply_to.iter().map(|p| MethodMatcher::new(p)).collect()
+            header
+                .apply_to
+                .iter()
+                .map(|p| MethodMatcher::new(p))
+                .collect()
         };
 
-        Self { name_matcher, apply_to }
+        Self {
+            name_matcher,
+            apply_to,
+        }
     }
 
     pub fn applies_to(&self, path: &GrpcPath) -> bool {
@@ -421,7 +442,11 @@ impl CompiledRateLimiting {
             default_window_seconds: config.default_window_seconds,
             default_key_type: config.key_type,
             default_key_metadata_name: config.key_metadata_name.clone(),
-            method_limits: config.per_method.iter().map(CompiledMethodRateLimit::new).collect(),
+            method_limits: config
+                .per_method
+                .iter()
+                .map(CompiledMethodRateLimit::new)
+                .collect(),
         }
     }
 
@@ -495,12 +520,14 @@ impl CompiledReflection {
             }
         }
 
-        let allowed_metadata = config.allowed_metadata.as_ref().map(|m| {
-            CompiledReflectionMetadata {
-                name: m.name.to_lowercase(),
-                values: m.values.clone(),
-            }
-        });
+        let allowed_metadata =
+            config
+                .allowed_metadata
+                .as_ref()
+                .map(|m| CompiledReflectionMetadata {
+                    name: m.name.to_lowercase(),
+                    values: m.values.clone(),
+                });
 
         Self {
             enabled: config.enabled,

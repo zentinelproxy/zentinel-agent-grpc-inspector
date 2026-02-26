@@ -45,7 +45,9 @@ impl RateLimiter {
                 let mut buckets = buckets.write().await;
                 let now = Instant::now();
                 // Remove buckets that haven't been used in 5 minutes
-                buckets.retain(|_, bucket| now.duration_since(bucket.last_update) < Duration::from_secs(300));
+                buckets.retain(|_, bucket| {
+                    now.duration_since(bucket.last_update) < Duration::from_secs(300)
+                });
             }
         });
     }
@@ -170,11 +172,7 @@ mod tests {
         // Should allow 10 requests
         for i in 0..10 {
             let result = bucket.try_consume();
-            assert!(
-                result.is_allowed(),
-                "Request {} should be allowed",
-                i + 1
-            );
+            assert!(result.is_allowed(), "Request {} should be allowed", i + 1);
         }
 
         // 11th request should be denied
