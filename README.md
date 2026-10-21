@@ -1,243 +1,199 @@
-# gRPC Inspector Agent for Zentinel
+<p align="center">
+  <a href="https://zentinelproxy.io">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/zentinelproxy/design/main/marks/lockup/zentinel-lockup-dark.svg">
+      <img alt="Zentinel" src="https://raw.githubusercontent.com/zentinelproxy/design/main/marks/lockup/zentinel-lockup-light.svg" height="52">
+    </picture>
+  </a>
+</p>
 
-A security agent for [Zentinel](https://zentinelproxy.io) that provides comprehensive security controls for gRPC services.
+<h3 align="center">gRPC inspector agent</h3>
 
-## Features
+<p align="center">Method authorization, metadata rules, rate limits and reflection control for gRPC calls, decided at the request-headers stage.</p>
 
-- **Method-level Authorization** - Allow/deny based on service and method with glob patterns and regex support
-- **Reflection API Control** - Block or allow gRPC reflection by client IP or metadata
-- **Metadata Inspection** - Required/forbidden headers with validation rules
-- **Message Size Limits** - Per-method max request/response size limits
-- **Rate Limiting** - Token bucket rate limiting per service/method/client
+<p align="center">
+  <a href="https://github.com/zentinelproxy/zentinel-agent-grpc-inspector/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/zentinelproxy/zentinel-agent-grpc-inspector/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-9b4d8a?style=flat&amp;labelColor=1f161e">
+  <img alt="Agent protocol v2" src="https://img.shields.io/badge/agent%20protocol-v2-f68d31?style=flat&amp;labelColor=1f161e">
+</p>
 
-## Installation
+<p align="center">
+  <a href="https://registry.zentinelproxy.io/grpc-inspector/">Registry</a> &middot;
+  <a href="https://docs.zentinelproxy.io">Docs</a> &middot;
+  <a href="https://github.com/zentinelproxy">All repositories</a>
+</p>
 
-### Using Bundle (Recommended)
+For teams that put gRPC services behind Zentinel and want per-method policy without touching the services. The agent parses `/package.Service/Method` from the request path of every request whose `content-type` starts with `application/grpc`, runs reflection, authorization, metadata and rate-limit checks in that order, and stops at the first one that fails, answering with a gRPC status. Non-gRPC requests and `grpc.health.v1.Health` calls pass unchecked. If the agent is unreachable, the `failure-mode` of the Zentinel filter decides.
+
+## Quick start
 
 ```bash
-# Install just this agent
 zentinel bundle install grpc-inspector
 
-# Or install all bundled agents
-zentinel bundle install
-```
-
-The bundle command downloads the correct binary for your platform and places it in the standard location. See the [bundle documentation](https://docs.zentinelproxy.io/deployment/bundle/) for details.
-
-### Using Cargo
-
-`zentinel-agent-grpc-inspector` is not published on crates.io, so `cargo install zentinel-agent-grpc-inspector` does not
-work. Install straight from the repository instead:
-
-```bash
-cargo install --git https://github.com/zentinelproxy/zentinel-agent-grpc-inspector
-```
-
-This builds and installs the `zentinel-grpc-inspector-agent` binary.
-
-### Prebuilt Binaries
-
-Each [release](https://github.com/zentinelproxy/zentinel-agent-grpc-inspector/releases) ships binaries
-for `linux-x86_64`, `linux-aarch64`, and `darwin-aarch64`:
-
-```bash
-VERSION=0.4.0
-PLATFORM=linux-x86_64   # or linux-aarch64, darwin-aarch64
-curl -fsSL -o zentinel-grpc-inspector-agent.tar.gz \
-  "https://github.com/zentinelproxy/zentinel-agent-grpc-inspector/releases/download/v${VERSION}/zentinel-grpc-inspector-agent-${VERSION}-${PLATFORM}.tar.gz"
-tar -xzf zentinel-grpc-inspector-agent.tar.gz
-sudo install -m 0755 zentinel-grpc-inspector-agent /usr/local/bin/
-```
-
-### From Source
-
-```bash
-git clone https://github.com/zentinelproxy/zentinel-agent-grpc-inspector
-cd zentinel-agent-grpc-inspector
-cargo build --release
-```
-
-## Usage
-
-```bash
-# Run with default config file (grpc-inspector.yaml)
-zentinel-grpc-inspector-agent
-
-# Specify config file
-zentinel-grpc-inspector-agent -c /path/to/config.yaml
-
-# Listen on gRPC (recommended)
-zentinel-grpc-inspector-agent -g 127.0.0.1:50051
-
-# Specify socket path (requires v2 UDS support — use gRPC if unsure)
-zentinel-grpc-inspector-agent -s /tmp/grpc-inspector.sock
-
-# Print example configuration
-zentinel-grpc-inspector-agent --print-config
-
-# Validate configuration
-zentinel-grpc-inspector-agent --validate
-```
-
-## Configuration
-
-### Basic Structure
-
-```yaml
-settings:
-  fail_action: block        # block or allow (detect-only mode)
-  debug_headers: false      # Add X-Grpc-Inspector-* debug headers
-  log_blocked: true         # Log blocked requests
-  log_allowed: false        # Log allowed requests (verbose)
-```
-
-### Authorization
-
-Control which services and methods are accessible:
-
-```yaml
-authorization:
-  enabled: true
-  default_action: allow     # Default for unmatched methods
-  rules:
-    # Allow all methods in PublicService
-    - service: "myapp.PublicService"
-      methods: ["*"]
-      action: allow
-
-    # Deny all Delete* methods in AdminService
-    - service: "myapp.AdminService"
-      methods: ["Delete*", "Destroy*"]
-      action: deny
-
-    # Block all internal services using regex
-    - service_pattern: "^myapp\\.internal\\."
-      methods: ["*"]
-      action: deny
-
-    # Require specific metadata for sensitive operations
-    - service: "myapp.PaymentService"
-      methods: ["ProcessPayment", "Refund"]
-      action: allow
-      require_metadata:
-        - name: "x-idempotency-key"
-          type: present
-      require_roles: ["payment_processor"]
-      roles_header: "x-user-roles"
-```
-
-### Size Limits
-
-Prevent oversized requests:
-
-```yaml
-size_limits:
-  enabled: true
-  default_max_request_bytes: 4194304     # 4MB
-  default_max_response_bytes: 4194304    # 4MB
-  per_method:
-    - service: "myapp.FileService"
-      method: "Upload"
-      max_request_bytes: 104857600       # 100MB for uploads
-      max_response_bytes: 1048576        # 1MB response
-```
-
-### Metadata Inspection
-
-Enforce header requirements:
-
-```yaml
-metadata:
-  enabled: true
-  required:
-    - name: "x-request-id"               # Require for all methods
-    - name: "x-tenant-id"
-      apply_to: ["myapp.TenantService/*"]
-  forbidden:
-    - name: "x-internal-only"            # Block if present
-    - name_pattern: "^x-debug-"          # Block debug headers
-      apply_to: ["myapp.ProductionService/*"]
-  validation:
-    - name: "content-type"
-      allowed_values:
-        - "application/grpc"
-        - "application/grpc+proto"
-```
-
-### Rate Limiting
-
-Token bucket rate limiting:
-
-```yaml
-rate_limiting:
-  enabled: true
-  default_limit: 1000                    # Requests per window
-  default_window_seconds: 60
-  key_type: client_ip                    # client_ip, metadata, or composite
-  per_method:
-    - service: "myapp.AuthService"
-      method: "Login"
-      limit: 10
-      window_seconds: 60
-      burst: 2
-    - service: "myapp.SearchService"
-      methods: ["*"]
-      limit: 100
-      window_seconds: 60
-      key_type: metadata
-      key_metadata_name: "x-user-id"
-```
-
-### Reflection Control
-
-Control gRPC reflection API access:
-
-```yaml
+cat > grpc-inspector.yaml <<'EOF'
 reflection:
-  enabled: true
-  allow: false                           # Block by default
-  allowed_clients:
-    - "127.0.0.1"                        # Allow localhost
-    - "10.0.0.0/8"                       # Allow internal network
-  allowed_metadata:
-    name: "x-reflection-key"
-    values: ["dev-key-12345"]
+  enabled: true      # block the reflection API for everyone
+EOF
+
+zentinel-grpc-inspector-agent -c grpc-inspector.yaml -g 127.0.0.1:50051
 ```
-
-## gRPC Status Codes
-
-When blocking requests, the agent returns appropriate gRPC status codes:
-
-| Scenario | gRPC Status | Code |
-|----------|-------------|------|
-| Method denied | PERMISSION_DENIED | 7 |
-| Missing metadata | UNAUTHENTICATED | 16 |
-| Insufficient roles | PERMISSION_DENIED | 7 |
-| Rate limited | RESOURCE_EXHAUSTED | 8 |
-| Request too large | RESOURCE_EXHAUSTED | 8 |
-| Invalid request | INVALID_ARGUMENT | 3 |
-
-## Zentinel Configuration
-
-Add the agent to your Zentinel proxy configuration:
 
 ```kdl
-agent "grpc-inspector" type="custom" {
-    grpc "http://127.0.0.1:50051"
-    events "request_headers" "request_body"
-    timeout-ms 100
-    failure-mode "open"
+system {
+    worker-threads 0
+}
+
+listeners {
+    listener "http" {
+        address "0.0.0.0:8080"
+        protocol "http"
+    }
+}
+
+upstreams {
+    upstream "grpc-backend" {
+        target "127.0.0.1:50052"
+    }
+}
+
+agents {
+    agent "grpc-inspector" type="custom" {
+        grpc "http://127.0.0.1:50051"
+        events "request_headers"
+        timeout-ms 100
+    }
+}
+
+filters {
+    filter "grpc-inspector" {
+        type "agent"
+        agent "grpc-inspector"
+        failure-mode "closed"
+    }
+}
+
+routes {
+    route "grpc" {
+        matches { path-prefix "/" }
+        upstream "grpc-backend"
+        filters "grpc-inspector"
+    }
 }
 ```
 
-## Testing
+A reflection call such as `curl -i -H 'content-type: application/grpc' http://localhost:8080/grpc.reflection.v1.ServerReflection/ServerReflectionInfo` is now refused with HTTP 403 and `grpc-status: 7`, before it reaches the upstream.
 
-Run the test suite:
+## Install
+
+### Bundle (recommended)
 
 ```bash
-cargo test
+zentinel bundle install grpc-inspector
 ```
+
+Downloads the release binary pinned in Zentinel's bundle lock and installs it as `zentinel-grpc-inspector-agent`.
+
+### Release binaries
+
+Tarballs for `linux-x86_64`, `linux-aarch64` and `darwin-aarch64` are attached to each [release](https://github.com/zentinelproxy/zentinel-agent-grpc-inspector/releases).
+
+### From source
+
+```bash
+cargo install --git https://github.com/zentinelproxy/zentinel-agent-grpc-inspector   # needs protoc
+```
+
+Installs the `zentinel-grpc-inspector-agent` binary.
+
+## Configuration
+
+The agent reads a YAML file (`-c`, default `grpc-inspector.yaml`; it must exist, and unknown keys are rejected). It acknowledges configuration sent over the protocol (`on_configure`) without applying it, and Zentinel 0.6.50 does not forward an `agent { config { ... } }` block anyway, so set everything in the file. `--print-config` prints a full example.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-c`, `--config` | `grpc-inspector.yaml` | Path to the YAML configuration file. |
+| `-g`, `--grpc-address` | `0.0.0.0:50051` | Address the agent's gRPC server listens on. Env `GRPC_INSPECTOR_GRPC_ADDRESS`. The default listens on all interfaces; pass `127.0.0.1:50051` unless the proxy is remote. |
+| `-L`, `--log-level` | `info` | Log level; `RUST_LOG` takes precedence. |
+| `--print-config` | | Print an example configuration and exit. |
+| `--validate` | | Load and validate the configuration, then exit. |
+
+The agent listens on gRPC only. `-s/--socket` is accepted but does not open a Unix socket: it starts the gRPC server on a random localhost port instead, so do not use it.
+
+Configuration file keys:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `settings.debug_headers` | `false` | On allowed calls, add `x-grpc-inspector-service` and `x-grpc-inspector-method`. |
+| `settings.log_blocked` | `true` | Log blocked calls. |
+| `settings.log_allowed` | `false` | Log allowed calls. |
+| `settings.fail_action` | `block` | Parsed but has no effect; there is no detect-only mode. |
+| `authorization.enabled` | `false` | Turn on method authorization. |
+| `authorization.default_action` | `allow` | `allow` or `deny` when no rule matches. |
+| `authorization.rules[].service` | | Exact full service name, e.g. `myapp.AdminService`. |
+| `authorization.rules[].service_pattern` | | Regex on the full service name (use instead of `service`). |
+| `authorization.rules[].methods` | | Method names; `*` for all, globs such as `Delete*`. A rule with no methods never matches. |
+| `authorization.rules[].action` | required | `allow` or `deny`. The first matching rule wins. |
+| `authorization.rules[].require_metadata` | | List of `{ name, type, value, pattern }`; `type` is `present` (default), `absent`, `exact` or `pattern`. |
+| `authorization.rules[].require_roles` | | The comma-separated `roles_header` must contain at least one of these. |
+| `authorization.rules[].roles_header` | | Header carrying the caller's roles. |
+| `metadata.enabled` | `false` | Turn on metadata checks. |
+| `metadata.required` | | List of `{ name, apply_to }`; the header must be present. `apply_to` takes `Service/*`-style paths. |
+| `metadata.forbidden` | | List of `{ name or name_pattern, apply_to }`; the header must be absent. |
+| `metadata.validation` | | List of `{ name, pattern, allowed_values }`, checked only when the header is present. (`max_value` is parsed but not used.) |
+| `rate_limiting.enabled` | `false` | Turn on rate limiting. |
+| `rate_limiting.default_limit` | `1000` | Calls per window for methods without a `per_method` entry. |
+| `rate_limiting.default_window_seconds` | `60` | Window length. |
+| `rate_limiting.key_type` | `client_ip` | `client_ip`, `metadata` (value of `key_metadata_name`) or `composite` (path plus client IP). |
+| `rate_limiting.key_metadata_name` | | Header used when `key_type` is `metadata`. |
+| `rate_limiting.per_method` | | List of `{ service, method or methods, limit, window_seconds, burst, key_type, key_metadata_name }`. |
+| `reflection.enabled` | `false` | Turn on reflection control (`grpc.reflection.v1` and `v1alpha`). |
+| `reflection.allow` | `false` | Allow reflection for everyone. |
+| `reflection.allowed_clients` | | IPs or CIDRs that may use reflection. |
+| `reflection.allowed_metadata` | | `{ name, values }`: a request with one of these header values may use reflection. |
+| `size_limits.*` | | Parsed and validated, **not enforced**: the agent never receives message bodies. |
+
+Full reference: <https://registry.zentinelproxy.io/grpc-inspector/>
+
+## How it works
+
+- **Blocking.** A refused call gets an HTTP status plus `grpc-status`, `grpc-message` and `content-type: application/grpc` headers:
+
+  | Check | gRPC status | HTTP status |
+  |---|---|---|
+  | Reflection disabled, method denied, no matching rule under `default_action: deny`, missing role | `PERMISSION_DENIED` (7) | 403 |
+  | Missing `require_metadata` on an authorization rule | `UNAUTHENTICATED` (16) | 401 |
+  | Missing required, forbidden or invalid metadata; malformed gRPC path | `INVALID_ARGUMENT` (3) | 400 |
+  | Rate limit exceeded (also sets `retry-after`) | `RESOURCE_EXHAUSTED` (8) | 429 |
+
+- **Client IP** for rate limits and `reflection.allowed_clients` comes from `X-Forwarded-For` (first address) or `X-Real-IP` only. Without either, every client shares the key `unknown`; a header the client sets itself is trusted.
+- **Rate limits** are token buckets held in memory per service, method and key: `limit` tokens refilled over `window_seconds`, starting with `limit + burst` tokens. Buckets idle for five minutes are dropped. They are not shared between agent instances.
+- **Metrics** are reported over the agent protocol: total, blocked and allowed counters.
+
+## Development
+
+```bash
+cargo build
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
+```
+
+Needs stable Rust (CI uses `dtolnay/rust-toolchain@stable`) and `protoc` (CI installs `protobuf-compiler`).
+
+## Related
+
+- [Registry page](https://registry.zentinelproxy.io/grpc-inspector/)
+- [Agent configuration](https://docs.zentinelproxy.io/configuration/agents/)
+- [Agent protocol v2](https://docs.zentinelproxy.io/agents/v2/)
+- [GraphQL security agent](https://github.com/zentinelproxy/zentinel-agent-graphql-security), the same idea for GraphQL APIs
+- [Zentinel](https://github.com/zentinelproxy/zentinel)
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Apache-2.0 (declared in Cargo.toml; this repository has no LICENSE file yet).
+
+---
+
+<p align="center">
+  <sub>Part of <a href="https://zentinelproxy.io">Zentinel</a>, the security-first reverse proxy. The shisa guards the gate.</sub>
+</p>
