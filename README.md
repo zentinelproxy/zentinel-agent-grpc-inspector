@@ -127,6 +127,7 @@ Configuration file keys:
 | `settings.log_blocked` | `true` | Log blocked calls. |
 | `settings.log_allowed` | `false` | Log allowed calls. |
 | `settings.fail_action` | `block` | Parsed but has no effect; there is no detect-only mode. |
+| `settings.trusted_proxies` | empty | IPs or CIDRs of proxies whose `X-Forwarded-For` / `X-Real-IP` are believed. Only needed with Zentinel older than 0.6.48; newer versions resolve the client behind the listener's `trusted-proxies` themselves. |
 | `authorization.enabled` | `false` | Turn on method authorization. |
 | `authorization.default_action` | `allow` | `allow` or `deny` when no rule matches. |
 | `authorization.rules[].service` | | Exact full service name, e.g. `myapp.AdminService`. |
@@ -165,7 +166,7 @@ Full reference: <https://registry.zentinelproxy.io/grpc-inspector/>
   | Missing required, forbidden or invalid metadata; malformed gRPC path | `INVALID_ARGUMENT` (3) | 400 |
   | Rate limit exceeded (also sets `retry-after`) | `RESOURCE_EXHAUSTED` (8) | 429 |
 
-- **Client IP** for rate limits and `reflection.allowed_clients` comes from `X-Forwarded-For` (first address) or `X-Real-IP` only. Without either, every client shares the key `unknown`; a header the client sets itself is trusted.
+- **Client IP** for rate limits and `reflection.allowed_clients` is the connection address Zentinel reports in the request metadata; forwarding headers the client sends are ignored. Only when that address is in `settings.trusted_proxies` are `X-Forwarded-For` (right to left, first hop that is not a trusted proxy) and then `X-Real-IP` read. A request without a usable address matches no `allowed_clients` entry and shares the rate-limit key `unknown` with every other such request.
 - **Rate limits** are token buckets held in memory per service, method and key: `limit` tokens refilled over `window_seconds`, starting with `limit + burst` tokens. Buckets idle for five minutes are dropped. They are not shared between agent instances.
 - **Metrics** are reported over the agent protocol: total, blocked and allowed counters.
 

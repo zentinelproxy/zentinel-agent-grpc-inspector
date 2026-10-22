@@ -1,11 +1,13 @@
 //! gRPC Inspector agent implementation.
 
+use crate::client_ip::{default_forwarding_headers, resolve_client_ip, TrustedProxies};
 use crate::config::{Config, FailAction, RateLimitKeyType};
 use crate::grpc::{is_grpc_content_type, parse_message_size, GrpcPath, GrpcStatus};
 use crate::matchers::CompiledConfig;
 use crate::rate_limiter::{RateLimitKey, RateLimitResult, RateLimiter};
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -22,6 +24,10 @@ pub struct GrpcInspectorAgent {
     config: Arc<Config>,
     compiled: Arc<CompiledConfig>,
     rate_limiter: Arc<RateLimiter>,
+    /// Proxies whose forwarding headers are believed
+    trusted_proxies: TrustedProxies,
+    /// Forwarding headers read behind a trusted proxy
+    forwarding_headers: Vec<String>,
     /// Counters for metrics
     requests_total: AtomicU64,
     requests_blocked: AtomicU64,
@@ -48,10 +54,20 @@ impl GrpcInspectorAgent {
             "gRPC Inspector agent initialized"
         );
 
+        // Config::validate rejects bad entries; if it was skipped, believe no
+        // forwarding headers rather than fail.
+        let trusted_proxies = TrustedProxies::parse(&config.settings.trusted_proxies)
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "Ignoring settings.trusted_proxies");
+                TrustedProxies::default()
+            });
+
         Self {
             config: Arc::new(config),
             compiled: Arc::new(compiled),
             rate_limiter: Arc::new(RateLimiter::new()),
+            trusted_proxies,
+            forwarding_headers: default_forwarding_headers(),
             requests_total: AtomicU64::new(0),
             requests_blocked: AtomicU64::new(0),
             requests_allowed: AtomicU64::new(0),
@@ -66,13 +82,16 @@ impl GrpcInspectorAgent {
             .collect()
     }
 
-    /// Get client IP from request headers.
-    fn get_client_ip(headers: &HashMap<String, String>) -> Option<String> {
-        // Try X-Forwarded-For first, then X-Real-IP
-        headers
-            .get("x-forwarded-for")
-            .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
-            .or_else(|| headers.get("x-real-ip").cloned())
+    /// Client IP: the connection address from the event metadata, or behind
+    /// a trusted proxy the right-most untrusted forwarding hop. `None` when
+    /// there is no usable address.
+    fn client_ip(&self, event: &RequestHeadersEvent) -> Option<IpAddr> {
+        resolve_client_ip(
+            &event.metadata.client_ip,
+            &event.headers,
+            &self.forwarding_headers,
+            &self.trusted_proxies,
+        )
     }
 
     /// Block with gRPC status.
@@ -183,6 +202,7 @@ impl GrpcInspectorAgent {
         &self,
         path: &GrpcPath,
         headers: &HashMap<String, String>,
+        client_ip: Option<IpAddr>,
     ) -> Option<AgentResponse> {
         if !self.compiled.reflection.enabled || !path.is_reflection() {
             return None;
@@ -194,8 +214,8 @@ impl GrpcInspectorAgent {
             return None;
         }
 
-        // Check if client IP is in allowlist
-        let client_ip = Self::get_client_ip(headers);
+        // Check if client IP is in allowlist (no usable IP matches nothing)
+        let client_ip = client_ip.map(|ip| ip.to_string());
         if self
             .compiled
             .reflection
@@ -278,6 +298,7 @@ impl GrpcInspectorAgent {
         &self,
         path: &GrpcPath,
         headers: &HashMap<String, String>,
+        client_ip: Option<IpAddr>,
     ) -> Option<AgentResponse> {
         if !self.compiled.rate_limiting.enabled {
             return None;
@@ -312,11 +333,13 @@ impl GrpcInspectorAgent {
                 )
             };
 
-        // Build rate limit key
+        // Build rate limit key. Requests without a usable client IP share
+        // one bucket, so they are limited together, never exempted.
+        let ip_key = client_ip
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
         let client_key = match key_type {
-            RateLimitKeyType::ClientIp => {
-                Self::get_client_ip(headers).unwrap_or_else(|| "unknown".to_string())
-            }
+            RateLimitKeyType::ClientIp => ip_key,
             RateLimitKeyType::Metadata => {
                 let header_name = key_metadata_name
                     .map(|s| s.to_lowercase())
@@ -327,8 +350,7 @@ impl GrpcInspectorAgent {
                     .unwrap_or_else(|| "unknown".to_string())
             }
             RateLimitKeyType::Composite => {
-                let ip = Self::get_client_ip(headers).unwrap_or_else(|| "unknown".to_string());
-                format!("{}:{}", path.full_path, ip)
+                format!("{}:{}", path.full_path, ip_key)
             }
         };
 
@@ -549,8 +571,10 @@ impl AgentHandlerV2 for GrpcInspectorAgent {
             return AgentResponse::default_allow().with_audit(audit);
         }
 
+        let client_ip = self.client_ip(&event);
+
         // Check reflection control (early exit)
-        if let Some(response) = self.check_reflection(&path, &headers) {
+        if let Some(response) = self.check_reflection(&path, &headers, client_ip) {
             return response;
         }
 
@@ -565,7 +589,7 @@ impl AgentHandlerV2 for GrpcInspectorAgent {
         }
 
         // Check rate limits
-        if let Some(response) = self.check_rate_limit(&path, &headers).await {
+        if let Some(response) = self.check_rate_limit(&path, &headers, client_ip).await {
             return response;
         }
 
@@ -679,24 +703,122 @@ authorization:
         assert_eq!(flat.get("x-request-id"), Some(&"123".to_string())); // First value only
     }
 
-    #[test]
-    fn test_get_client_ip() {
-        let mut headers = HashMap::new();
-        headers.insert(
-            "x-forwarded-for".to_string(),
-            "1.2.3.4, 5.6.7.8".to_string(),
+    fn grpc_event(client_ip: &str, uri: &str, headers: &[(&str, &str)]) -> RequestHeadersEvent {
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        map.insert(
+            "content-type".to_string(),
+            vec!["application/grpc".to_string()],
         );
-        assert_eq!(
-            GrpcInspectorAgent::get_client_ip(&headers),
-            Some("1.2.3.4".to_string())
-        );
+        for (k, v) in headers {
+            map.entry(k.to_string()).or_default().push(v.to_string());
+        }
+        RequestHeadersEvent {
+            metadata: zentinel_agent_protocol::RequestMetadata {
+                correlation_id: "test".to_string(),
+                request_id: "test".to_string(),
+                client_ip: client_ip.to_string(),
+                client_port: 40000,
+                server_name: None,
+                protocol: "HTTP/2".to_string(),
+                tls_version: None,
+                tls_cipher: None,
+                route_id: None,
+                upstream_id: None,
+                timestamp: "2026-10-22T00:00:00Z".to_string(),
+                traceparent: None,
+            },
+            method: "POST".to_string(),
+            uri: uri.to_string(),
+            headers: map,
+        }
+    }
 
-        let mut headers = HashMap::new();
-        headers.insert("x-real-ip".to_string(), "10.0.0.1".to_string());
-        assert_eq!(
-            GrpcInspectorAgent::get_client_ip(&headers),
-            Some("10.0.0.1".to_string())
+    fn reflection_agent(trusted: &str) -> GrpcInspectorAgent {
+        let yaml = format!(
+            "settings:\n  trusted_proxies: [{}]\nreflection:\n  enabled: true\n  allow: false\n  allowed_clients:\n    - \"127.0.0.1\"\n",
+            trusted
         );
+        let config: Config = serde_yaml::from_str(&yaml).unwrap();
+        config.validate().unwrap();
+        GrpcInspectorAgent::new(config)
+    }
+
+    const REFLECTION: &str = "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo";
+
+    async fn blocked(agent: &GrpcInspectorAgent, event: RequestHeadersEvent) -> bool {
+        let response = agent.on_request_headers(event).await;
+        matches!(
+            response.decision,
+            zentinel_agent_protocol::Decision::Block { .. }
+        )
+    }
+
+    #[tokio::test]
+    async fn test_spoofed_forwarding_headers_ignored() {
+        let agent = reflection_agent("");
+        // A remote client claiming to be localhost does not get reflection.
+        for header in ["x-forwarded-for", "x-real-ip"] {
+            let event = grpc_event("203.0.113.9", REFLECTION, &[(header, "127.0.0.1")]);
+            assert!(blocked(&agent, event).await, "{} was believed", header);
+        }
+        // The real localhost connection does.
+        let event = grpc_event(
+            "127.0.0.1",
+            REFLECTION,
+            &[("x-forwarded-for", "203.0.113.9")],
+        );
+        assert!(!blocked(&agent, event).await);
+    }
+
+    #[tokio::test]
+    async fn test_trusted_proxy_uses_right_most_untrusted_hop() {
+        let agent = reflection_agent("\"10.0.0.0/8\"");
+        // Behind the trusted proxy 10.0.0.1, the hop it saw is the client.
+        let event = grpc_event(
+            "10.0.0.1",
+            REFLECTION,
+            &[("x-forwarded-for", "203.0.113.9, 127.0.0.1")],
+        );
+        assert!(!blocked(&agent, event).await);
+        // A spoofed left-most "127.0.0.1" does not count.
+        let event = grpc_event(
+            "10.0.0.1",
+            REFLECTION,
+            &[("x-forwarded-for", "127.0.0.1, 203.0.113.9")],
+        );
+        assert!(blocked(&agent, event).await);
+    }
+
+    #[tokio::test]
+    async fn test_no_usable_ip_not_allowed() {
+        let agent = reflection_agent("\"0.0.0.0/0\"");
+        let event = grpc_event("", REFLECTION, &[("x-forwarded-for", "127.0.0.1")]);
+        assert!(blocked(&agent, event).await);
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_key_ignores_spoofed_xff() {
+        let yaml = r#"
+rate_limiting:
+  enabled: true
+  per_method:
+    - service: "test.LimitedService"
+      method: "Call"
+      limit: 2
+      window_seconds: 60
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let agent = GrpcInspectorAgent::new(config);
+        // Rotating X-Forwarded-For does not buy a fresh bucket.
+        for (i, expect_block) in [false, false, true].iter().enumerate() {
+            let xff = format!("198.51.100.{}", i);
+            let event = grpc_event(
+                "203.0.113.9",
+                "/test.LimitedService/Call",
+                &[("x-forwarded-for", xff.as_str())],
+            );
+            assert_eq!(blocked(&agent, event).await, *expect_block, "request {}", i);
+        }
     }
 
     #[tokio::test]
@@ -736,17 +858,17 @@ rate_limiting:
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         let agent = GrpcInspectorAgent::new(config);
 
-        let mut headers = HashMap::new();
-        headers.insert("x-forwarded-for".to_string(), "1.2.3.4".to_string());
+        let headers = HashMap::new();
+        let ip = Some("1.2.3.4".parse().unwrap());
 
         let path = GrpcPath::parse("/test.LimitedService/Call").unwrap();
 
         // First two requests should be allowed
-        assert!(agent.check_rate_limit(&path, &headers).await.is_none());
-        assert!(agent.check_rate_limit(&path, &headers).await.is_none());
+        assert!(agent.check_rate_limit(&path, &headers, ip).await.is_none());
+        assert!(agent.check_rate_limit(&path, &headers, ip).await.is_none());
 
         // Third request should be denied
-        assert!(agent.check_rate_limit(&path, &headers).await.is_some());
+        assert!(agent.check_rate_limit(&path, &headers, ip).await.is_some());
     }
 
     #[tokio::test]
@@ -764,15 +886,18 @@ reflection:
         let path =
             GrpcPath::parse("/grpc.reflection.v1.ServerReflection/ServerReflectionInfo").unwrap();
 
+        let headers = HashMap::new();
+
         // Unknown client should be blocked
-        let mut headers = HashMap::new();
-        headers.insert("x-forwarded-for".to_string(), "1.2.3.4".to_string());
-        assert!(agent.check_reflection(&path, &headers).is_some());
+        let ip = Some("1.2.3.4".parse().unwrap());
+        assert!(agent.check_reflection(&path, &headers, ip).is_some());
+
+        // No usable client IP should be blocked
+        assert!(agent.check_reflection(&path, &headers, None).is_some());
 
         // Localhost should be allowed
-        let mut headers = HashMap::new();
-        headers.insert("x-forwarded-for".to_string(), "127.0.0.1".to_string());
-        assert!(agent.check_reflection(&path, &headers).is_none());
+        let ip = Some("127.0.0.1".parse().unwrap());
+        assert!(agent.check_reflection(&path, &headers, ip).is_none());
     }
 
     #[tokio::test]

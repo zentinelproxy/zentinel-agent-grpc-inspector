@@ -8,6 +8,7 @@
 //! - Reflection API control
 
 pub mod agent;
+pub mod client_ip;
 pub mod config;
 pub mod grpc;
 pub mod matchers;
