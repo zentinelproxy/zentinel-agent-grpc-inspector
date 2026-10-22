@@ -2,26 +2,31 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use std::path::PathBuf;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use zentinel_agent_grpc_inspector::{Config, GrpcInspectorAgent};
-use zentinel_agent_protocol::v2::GrpcAgentServerV2;
+use zentinel_agent_protocol::v2::{GrpcAgentServerV2, UdsAgentServerV2};
 
 #[derive(Parser, Debug)]
-#[command(name = "zentinel-agent-grpc-inspector")]
+#[command(name = "zentinel-grpc-inspector-agent")]
 #[command(about = "gRPC security agent for Zentinel (v2 protocol)")]
 #[command(version)]
 struct Args {
-    /// Path to configuration file
-    #[arg(short, long, default_value = "grpc-inspector.yaml")]
-    config: PathBuf,
+    /// Path to configuration file. Without it, `grpc-inspector.yaml` in the
+    /// working directory is read if it exists, otherwise the agent starts
+    /// with the defaults (every check off: every request is allowed).
+    #[arg(short, long)]
+    config: Option<PathBuf>,
 
-    /// Unix socket path (mutually exclusive with --grpc-address)
+    /// Unix socket to serve agent protocol v2 on (the default transport;
+    /// mutually exclusive with --grpc-address)
     #[arg(short, long, conflicts_with = "grpc_address")]
     socket: Option<PathBuf>,
 
-    /// gRPC address to listen on (e.g., "0.0.0.0:50051")
+    /// gRPC address to serve agent protocol v2 on instead of the Unix socket
+    /// (e.g., "127.0.0.1:50051")
     #[arg(
         short = 'g',
         long,
@@ -144,6 +149,53 @@ reflection:
     println!("{}", example);
 }
 
+/// Config file read when `--config` is not given, if it exists.
+const DEFAULT_CONFIG: &str = "grpc-inspector.yaml";
+
+/// Unix socket used when neither `--socket` nor `--grpc-address` is given.
+const DEFAULT_SOCKET: &str = "/tmp/zentinel-grpc-inspector.sock";
+
+/// An explicit `--config` must exist; the implicit default file is optional.
+fn load_config(path: Option<&Path>) -> Result<Config> {
+    match path {
+        Some(path) => {
+            info!(config = %path.display(), "Loading configuration");
+            Config::from_file(path)
+                .with_context(|| format!("failed to load config {}", path.display()))
+        }
+        None if Path::new(DEFAULT_CONFIG).exists() => {
+            info!(config = DEFAULT_CONFIG, "Loading configuration");
+            Config::from_file(Path::new(DEFAULT_CONFIG))
+                .with_context(|| format!("failed to load config {DEFAULT_CONFIG}"))
+        }
+        None => {
+            info!("No configuration file, using defaults");
+            let config = Config::default();
+            config.validate()?;
+            Ok(config)
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Transport {
+    Uds(PathBuf),
+    Grpc(SocketAddr),
+}
+
+/// `--grpc-address` (or `GRPC_INSPECTOR_GRPC_ADDRESS`) selects gRPC;
+/// otherwise the agent serves the Unix socket.
+fn transport(args: &Args) -> Result<Transport> {
+    match (&args.socket, &args.grpc_address) {
+        (_, Some(addr)) => Ok(Transport::Grpc(
+            addr.parse()
+                .context("Invalid gRPC address format (expected host:port)")?,
+        )),
+        (Some(socket), None) => Ok(Transport::Uds(socket.clone())),
+        (None, None) => Ok(Transport::Uds(PathBuf::from(DEFAULT_SOCKET))),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -164,8 +216,7 @@ async fn main() -> Result<()> {
         .init();
 
     // Load configuration
-    info!(config = %args.config.display(), "Loading configuration");
-    let config = Config::from_file(&args.config)?;
+    let config = load_config(args.config.as_deref())?;
 
     // Handle --validate
     if args.validate {
@@ -176,65 +227,114 @@ async fn main() -> Result<()> {
     // Create agent
     let agent = GrpcInspectorAgent::new(config);
 
-    // Determine transport mode
-    match (&args.socket, &args.grpc_address) {
-        (Some(socket), None) => {
-            // Unix socket mode (v2 protocol over UDS)
-            info!(socket = %socket.display(), "Starting gRPC Inspector agent (Unix socket, v2 protocol)");
-
-            // For UDS transport, we'd use AgentServerV2Uds when available
-            // For now, fall back to gRPC server on localhost
-            let addr = "127.0.0.1:0"
-                .parse()
-                .context("Failed to parse fallback address")?;
-            let server = GrpcAgentServerV2::new("grpc-inspector", Box::new(agent));
+    match transport(&args)? {
+        Transport::Uds(socket) => {
+            info!(
+                socket = %socket.display(),
+                version = env!("CARGO_PKG_VERSION"),
+                "Starting gRPC Inspector agent (Unix socket, v2 protocol)"
+            );
+            let server = UdsAgentServerV2::new("grpc-inspector", socket, Box::new(agent));
             server
-                .run(addr)
+                .run()
                 .await
                 .context("Failed to run gRPC Inspector agent")?;
         }
-        (None, Some(grpc_addr)) => {
-            // gRPC transport mode (v2 protocol)
+        Transport::Grpc(addr) => {
             info!(
-                grpc_address = %grpc_addr,
+                grpc_address = %addr,
                 version = env!("CARGO_PKG_VERSION"),
                 "Starting gRPC Inspector agent (gRPC transport, v2 protocol)"
             );
-
-            let addr = grpc_addr
-                .parse()
-                .context("Invalid gRPC address format (expected host:port)")?;
-
             let server = GrpcAgentServerV2::new("grpc-inspector", Box::new(agent));
             server
                 .run(addr)
                 .await
                 .context("Failed to run gRPC Inspector agent")?;
-        }
-        (None, None) => {
-            // Default: gRPC on 0.0.0.0:50051
-            let default_addr = "0.0.0.0:50051";
-            info!(
-                grpc_address = %default_addr,
-                version = env!("CARGO_PKG_VERSION"),
-                "Starting gRPC Inspector agent (gRPC transport, v2 protocol, default)"
-            );
-
-            let addr = default_addr
-                .parse()
-                .context("Failed to parse default address")?;
-
-            let server = GrpcAgentServerV2::new("grpc-inspector", Box::new(agent));
-            server
-                .run(addr)
-                .await
-                .context("Failed to run gRPC Inspector agent")?;
-        }
-        (Some(_), Some(_)) => {
-            // This shouldn't happen due to clap's conflicts_with
-            unreachable!("Cannot specify both --socket and --grpc-address");
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    fn args(argv: &[&str]) -> Args {
+        Args::try_parse_from(
+            std::iter::once("zentinel-grpc-inspector-agent").chain(argv.iter().copied()),
+        )
+        .unwrap()
+    }
+
+    /// The release pipeline and `zentinel bundle install` expect exactly
+    /// `<binary> <version>`.
+    #[test]
+    fn version_is_binary_name_and_package_version() {
+        assert_eq!(
+            Args::command().render_version(),
+            format!("{} {}\n", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    #[test]
+    fn socket_selects_the_unix_socket() {
+        assert_eq!(
+            transport(&args(&["--socket", "/tmp/x.sock"])).unwrap(),
+            Transport::Uds(PathBuf::from("/tmp/x.sock"))
+        );
+    }
+
+    #[test]
+    fn default_transport_is_the_unix_socket() {
+        if std::env::var_os("GRPC_INSPECTOR_GRPC_ADDRESS").is_some() {
+            return;
+        }
+        assert_eq!(
+            transport(&args(&[])).unwrap(),
+            Transport::Uds(PathBuf::from(DEFAULT_SOCKET))
+        );
+    }
+
+    #[test]
+    fn grpc_address_selects_grpc() {
+        assert_eq!(
+            transport(&args(&["--grpc-address", "127.0.0.1:50051"])).unwrap(),
+            Transport::Grpc("127.0.0.1:50051".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn starts_without_a_config_file() {
+        assert!(load_config(None).is_ok());
+    }
+
+    #[test]
+    fn explicit_missing_config_is_an_error() {
+        assert!(load_config(Some(Path::new("/nonexistent/grpc-inspector.yaml"))).is_err());
+    }
+
+    /// The Unix socket used to be a gRPC server on a random TCP port: nothing
+    /// ever listened on the socket path.
+    #[tokio::test]
+    async fn unix_socket_is_actually_served() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("agent.sock");
+        let server = UdsAgentServerV2::new(
+            "grpc-inspector",
+            socket.clone(),
+            Box::new(GrpcInspectorAgent::new(Config::default())),
+        );
+        let task = tokio::spawn(async move { server.run().await });
+        for _ in 0..50 {
+            if tokio::net::UnixStream::connect(&socket).await.is_ok() {
+                task.abort();
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("nothing listens on {}", socket.display());
+    }
 }
