@@ -190,7 +190,7 @@ Needs stable Rust (CI uses `dtolnay/rust-toolchain@stable`) and `protoc` (CI ins
 
 ## License
 
-Apache-2.0 (declared in Cargo.toml; this repository has no LICENSE file yet).
+Apache-2.0, see [`LICENSE`](LICENSE).
 
 ---
 
