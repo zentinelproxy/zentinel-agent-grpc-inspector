@@ -93,6 +93,14 @@ zentinel bundle install grpc-inspector
 
 Downloads the release binary pinned in Zentinel's bundle lock and installs it as `zentinel-grpc-inspector-agent`.
 
+> [!WARNING]
+> The published `0.4.0` release, which Zentinel 26.10_7's bundle lock pins,
+> was not built from its tag (it reports `zentinel-agent-grpc-inspector
+> 0.2.0`), exits at startup unless `grpc-inspector.yaml` exists in its
+> working directory, and never listens on the Unix socket `zentinel bundle
+> install` configures (only `--grpc-address` works). Use `0.5.0` or later, the first release built and
+> smoke-tested by the shared release pipeline (below).
+
 ### Release binaries
 
 Tarballs for `linux-x86_64`, `linux-aarch64` and `darwin-aarch64` are attached to each [release](https://github.com/zentinelproxy/zentinel-agent-grpc-inspector/releases).
@@ -107,17 +115,19 @@ Installs the `zentinel-grpc-inspector-agent` binary.
 
 ## Configuration
 
-The agent reads a YAML file (`-c`, default `grpc-inspector.yaml`; it must exist, and unknown keys are rejected). It acknowledges configuration sent over the protocol (`on_configure`) without applying it, and Zentinel 0.6.50 does not forward an `agent { config { ... } }` block anyway, so set everything in the file. `--print-config` prints a full example.
+The agent reads a YAML file: `-c <path>` (which must exist), or else `grpc-inspector.yaml` in the working directory if there is one; unknown keys are rejected. Without either it starts with the defaults: every check off, every request allowed. It acknowledges configuration sent over the protocol (`on_configure`) without applying it, and Zentinel 0.6.50 does not forward an `agent { config { ... } }` block anyway, so set everything in the file. `--print-config` prints a full example.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `-c`, `--config` | `grpc-inspector.yaml` | Path to the YAML configuration file. |
-| `-g`, `--grpc-address` | `0.0.0.0:50051` | Address the agent's gRPC server listens on. Env `GRPC_INSPECTOR_GRPC_ADDRESS`. The default listens on all interfaces; pass `127.0.0.1:50051` unless the proxy is remote. |
+| `-c`, `--config` | `grpc-inspector.yaml` if present | Path to the YAML configuration file. An explicit path that does not exist is an error. |
+| `-s`, `--socket` | `/tmp/zentinel-grpc-inspector.sock` | Unix socket to serve agent protocol v2 on. The default transport. |
+| `-g`, `--grpc-address` | none | Serve gRPC on this address (e.g. `127.0.0.1:50051`) instead of the Unix socket. Env `GRPC_INSPECTOR_GRPC_ADDRESS`. |
 | `-L`, `--log-level` | `info` | Log level; `RUST_LOG` takes precedence. |
 | `--print-config` | | Print an example configuration and exit. |
 | `--validate` | | Load and validate the configuration, then exit. |
+| `-V`, `--version` | | Print `zentinel-grpc-inspector-agent <version>` and exit. |
 
-The agent listens on gRPC only. `-s/--socket` is accepted but does not open a Unix socket: it starts the gRPC server on a random localhost port instead, so do not use it.
+Until 0.5.0 the agent served gRPC only: `-s/--socket` started a gRPC server on a random localhost port instead of the socket, and without any flag it listened on `0.0.0.0:50051`. It now serves the Unix socket by default, like every other agent; pass `-g` for gRPC.
 
 Configuration file keys:
 
@@ -180,6 +190,37 @@ cargo fmt --all --check
 ```
 
 Needs stable Rust (CI uses `dtolnay/rust-toolchain@stable`) and `protoc` (CI installs `protobuf-compiler`).
+
+## Releases and smoke test
+
+Releases go through the shared agent pipeline
+([`zentinelproxy/.github`](https://github.com/zentinelproxy/.github/tree/main/agent-smoke)):
+pushing a tag `vX.Y.Z` that matches `Cargo.toml` builds `zentinel-grpc-inspector-agent` with
+`--locked` for `linux-x86_64`, `linux-aarch64` and `darwin-aarch64`, checks
+that `zentinel-grpc-inspector-agent --version` prints `zentinel-grpc-inspector-agent X.Y.Z`, runs
+[`scripts/smoke-test.sh`](scripts/smoke-test.sh) behind the latest Zentinel
+release on every platform, and only then publishes the tarballs
+`zentinel bundle install` downloads. CI runs the same pipeline on
+`linux-x86_64` for every push and pull request.
+
+The smoke test runs the release binary behind a real Zentinel with the agent,
+filter and route all `failure-mode "closed"`, over the Unix socket (the
+transport `zentinel bundle install` uses) and gRPC. It checks that the agent starts and allows without a config file,
+and, with method rules, forbidden metadata and the reflection API blocked,
+that an allowed method and a non-gRPC request are forwarded while a denied
+method, an internal service and a reflection call get `403`, and forbidden
+metadata and a malformed gRPC path `400`, none of them reaching the upstream;
+and that the request is refused once the agent is stopped (so the agent
+really is on the request path).
+
+Run it locally:
+
+```bash
+gh release download 26.10_7 --repo zentinelproxy/zentinel --pattern 'zentinel-26.10_7-darwin-arm64.tar.gz*'
+shasum -a 256 -c zentinel-26.10_7-darwin-arm64.tar.gz.sha256 && tar xzf zentinel-26.10_7-darwin-arm64.tar.gz
+cargo build --release --locked
+AGENT_SMOKE=../.github/agent-smoke/smoke.py scripts/smoke-test.sh target/release/zentinel-grpc-inspector-agent ./zentinel
+```
 
 ## Related
 
