@@ -43,6 +43,8 @@ impl Config {
 
     /// Validate the configuration.
     pub fn validate(&self) -> anyhow::Result<()> {
+        crate::client_ip::TrustedProxies::parse(&self.settings.trusted_proxies)
+            .map_err(|e| anyhow::anyhow!("settings.trusted_proxies: {}", e))?;
         self.authorization.validate()?;
         self.size_limits.validate()?;
         self.metadata.validate()?;
@@ -71,6 +73,11 @@ pub struct Settings {
     /// Log allowed requests (verbose)
     #[serde(default)]
     pub log_allowed: bool,
+
+    /// Proxies (IPs or CIDRs) whose X-Forwarded-For / X-Real-IP are believed.
+    /// The client IP is otherwise the connection address Zentinel reports.
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
 }
 
 impl Default for Settings {
@@ -80,6 +87,7 @@ impl Default for Settings {
             debug_headers: false,
             log_blocked: true,
             log_allowed: false,
+            trusted_proxies: Vec::new(),
         }
     }
 }

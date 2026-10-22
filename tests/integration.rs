@@ -808,6 +808,7 @@ async fn test_agent_creation_with_full_config() {
             debug_headers: true,
             log_blocked: true,
             log_allowed: false,
+            trusted_proxies: vec!["10.0.0.0/8".to_string()],
         },
         authorization: AuthorizationConfig {
             enabled: true,
