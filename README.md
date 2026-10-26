@@ -99,7 +99,8 @@ Downloads the release binary pinned in Zentinel's bundle lock and installs it as
 > 0.2.0`), exits at startup unless `grpc-inspector.yaml` exists in its
 > working directory, and never listens on the Unix socket `zentinel bundle
 > install` configures (only `--grpc-address` works). Use `0.5.0` or later, the first release built and
-> smoke-tested by the shared release pipeline (below).
+> smoke-tested by the shared release pipeline (below); Zentinel 26.10_8's
+> bundle lock (`26.10_02`) pins `0.5.0`.
 
 ### Release binaries
 
@@ -115,7 +116,7 @@ Installs the `zentinel-grpc-inspector-agent` binary.
 
 ## Configuration
 
-The agent reads a YAML file: `-c <path>` (which must exist), or else `grpc-inspector.yaml` in the working directory if there is one; unknown keys are rejected. Without either it starts with the defaults: every check off, every request allowed. It acknowledges configuration sent over the protocol (`on_configure`) without applying it, and Zentinel 0.6.50 does not forward an `agent { config { ... } }` block anyway, so set everything in the file. `--print-config` prints a full example.
+The agent reads a YAML file: `-c <path>` (which must exist), or else `grpc-inspector.yaml` in the working directory if there is one; unknown keys are rejected. Without either it starts with the defaults: every check off, every request allowed. Zentinel 26.10_8 and later send the agent block's `config { }` to the agent on every connection (releases up to 0.6.50 never did); this agent acknowledges it (`on_configure`) without applying it, so set everything in the file. `--print-config` prints a full example.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -216,8 +217,8 @@ really is on the request path).
 Run it locally:
 
 ```bash
-gh release download 26.10_7 --repo zentinelproxy/zentinel --pattern 'zentinel-26.10_7-darwin-arm64.tar.gz*'
-shasum -a 256 -c zentinel-26.10_7-darwin-arm64.tar.gz.sha256 && tar xzf zentinel-26.10_7-darwin-arm64.tar.gz
+gh release download 26.10_8 --repo zentinelproxy/zentinel --pattern 'zentinel-26.10_8-darwin-arm64.tar.gz*'
+shasum -a 256 -c zentinel-26.10_8-darwin-arm64.tar.gz.sha256 && tar xzf zentinel-26.10_8-darwin-arm64.tar.gz
 cargo build --release --locked
 AGENT_SMOKE=../.github/agent-smoke/smoke.py scripts/smoke-test.sh target/release/zentinel-grpc-inspector-agent ./zentinel
 ```
